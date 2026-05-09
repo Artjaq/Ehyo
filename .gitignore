@@ -36,5 +36,50 @@ dist-ssr
 *.sw?
 
 # Claude Code local config (contains tool permissions)
-.claude/settings.local.json
+.claude/
+!.claude/CLAUDE.md
+
+# Clés cryptographiques et certificats
+*.pem
+*.key
+*.cert
+*.crt
+*.p12
+*.pfx
+*.keystore
+*.jks
+
+# Plateformes de déploiement
+.vercel
+.netlify
+.firebase
+.firebaserc
+
+# Caches de build
+*.tsbuildinfo
+.cache/
+.turbo/
+.parcel-cache/
+.eslintcache
+
+# Backups et fichiers d'éditeurs
+*.bak
+*.backup
+*~
+*.orig
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Archives
+*.zip
+*.tar.gz
+*.rar
+*.7z
+
+# Tests / coverage
+coverage/
+.nyc_output/
 
