@@ -1,22 +1,52 @@
 <script setup lang="ts">
+import { computed } from 'vue'
 import { useRouter } from 'vue-router'
 import GlitchText from '@/components/GlitchText.vue'
 import ProductCanvas from '@/components/ProductCanvas.vue'
+import { products } from '@/data/products'
 
 const router = useRouter()
 
-/**
- * Drop catalogue — add modelPath per slot when you have a .glb ready.
- * Example: { id: '001', color: '#00eaff', modelPath: '/models/cap.glb' }
- */
-const slots = [
-  { id: '001', color: '#00eaff', modelPath: undefined },
-  { id: '002', color: '#ff00cc', modelPath: undefined },
-  { id: '003', color: '#39ff14', modelPath: undefined },
-  { id: '004', color: '#ffaa00', modelPath: undefined },
-  { id: '005', color: '#00eaff', modelPath: undefined },
-  { id: '006', color: '#ff00cc', modelPath: undefined },
-]
+const GRID_SIZE = 6
+const PLACEHOLDER_COLORS = ['#00eaff', '#ff00cc', '#39ff14', '#ffaa00', '#00eaff', '#ff00cc']
+
+interface GridSlot {
+  key: string
+  color: string
+  modelPath: string | undefined
+  label: string
+  isPlaceholder: boolean
+  slug: string
+}
+
+const grid = computed((): GridSlot[] => {
+  const slots: GridSlot[] = products.map(p => ({
+    key: p.id,
+    color: p.color,
+    modelPath: p.modelPath,
+    label: p.name,
+    isPlaceholder: false,
+    slug: p.slug,
+  }))
+
+  while (slots.length < GRID_SIZE) {
+    const i = slots.length
+    slots.push({
+      key: `placeholder-${i}`,
+      color: PLACEHOLDER_COLORS[i % PLACEHOLDER_COLORS.length],
+      modelPath: undefined,
+      label: `UNIT-${(i + 1).toString().padStart(3, '0')}`,
+      isPlaceholder: true,
+      slug: '',
+    })
+  }
+
+  return slots
+})
+
+function navigateToProduct(slug: string) {
+  router.push(`/shop/${slug}`)
+}
 </script>
 
 <template>
@@ -32,18 +62,20 @@ const slots = [
       <!-- Slot grid -->
       <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4 sm:gap-6">
         <div
-          v-for="slot in slots"
-          :key="slot.id"
+          v-for="item in grid"
+          :key="item.key"
           class="slot-card"
-          :style="{ '--c': slot.color }"
+          :class="{ 'cursor-pointer': !item.isPlaceholder }"
+          :style="{ '--c': item.color }"
+          @click="!item.isPlaceholder && navigateToProduct(item.slug)"
         >
           <!-- Layer 0: faint tech grid (background) -->
           <div class="slot-grid" />
 
           <!-- Layer 1: 3D canvas (fills card, transparent bg) -->
-          <ProductCanvas 
-          :model-path="slot.modelPath"
-          :scale="0.5" />
+          <ProductCanvas
+            :model-path="item.modelPath"
+            :scale="0.5" />
 
           <!-- Layer 2: HUD overlays (float above canvas) -->
           <span class="corner tl" />
@@ -51,7 +83,7 @@ const slots = [
           <span class="corner bl" />
           <span class="corner br" />
 
-          <span class="unit-label font-press">UNIT-{{ slot.id }}</span>
+          <span class="unit-label font-press">{{ item.label }}</span>
           <span class="slot-status font-press">// AWAITING DROP //</span>
         </div>
       </div>
