@@ -21,6 +21,7 @@
     }
   },
   "include": ["**/*.ts", "**/*.d.ts", "**/*.tsx", "**/*.vue"],
+  "exclude": ["vite.config.ts"],
   "references": [{ "path": "./tsconfig.node.json" }]
 }
 

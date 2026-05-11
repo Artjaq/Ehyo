@@ -1,5 +1,4 @@
 <script setup lang="ts">
-import { computed } from 'vue'
 import { useRouter } from 'vue-router'
 import GlitchText from '@/components/GlitchText.vue'
 import ProductCanvas from '@/components/ProductCanvas.vue'
@@ -7,42 +6,7 @@ import { products } from '@/data/products'
 
 const router = useRouter()
 
-const GRID_SIZE = 6
-const PLACEHOLDER_COLORS = ['#00eaff', '#ff00cc', '#39ff14', '#ffaa00', '#00eaff', '#ff00cc']
-
-interface GridSlot {
-  key: string
-  color: string
-  modelPath: string | undefined
-  label: string
-  isPlaceholder: boolean
-  slug: string
-}
-
-const grid = computed((): GridSlot[] => {
-  const slots: GridSlot[] = products.map(p => ({
-    key: p.id,
-    color: p.color,
-    modelPath: p.modelPath,
-    label: p.name,
-    isPlaceholder: false,
-    slug: p.slug,
-  }))
-
-  while (slots.length < GRID_SIZE) {
-    const i = slots.length
-    slots.push({
-      key: `placeholder-${i}`,
-      color: PLACEHOLDER_COLORS[i % PLACEHOLDER_COLORS.length],
-      modelPath: undefined,
-      label: `UNIT-${(i + 1).toString().padStart(3, '0')}`,
-      isPlaceholder: true,
-      slug: '',
-    })
-  }
-
-  return slots
-})
+const product = products[0]
 
 function navigateToProduct(slug: string) {
   router.push(`/shop/${slug}`)
@@ -59,22 +23,19 @@ function navigateToProduct(slug: string) {
         <p class="sys-label font-press mt-2">INVENTORY // SCANNING UNITS</p>
       </div>
 
-      <!-- Slot grid -->
-      <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4 sm:gap-6">
+      <!-- Single unit slot -->
+      <div class="flex justify-center">
         <div
-          v-for="item in grid"
-          :key="item.key"
-          class="slot-card"
-          :class="{ 'cursor-pointer': !item.isPlaceholder }"
-          :style="{ '--c': item.color }"
-          @click="!item.isPlaceholder && navigateToProduct(item.slug)"
+          class="slot-card cursor-pointer w-full max-w-[320px] sm:max-w-[380px]"
+          :style="{ '--c': product.color }"
+          @click="navigateToProduct(product.slug)"
         >
           <!-- Layer 0: faint tech grid (background) -->
           <div class="slot-grid" />
 
           <!-- Layer 1: 3D canvas (fills card, transparent bg) -->
           <ProductCanvas
-            :model-path="item.modelPath"
+            :model-path="product.modelPath"
             :scale="0.5" />
 
           <!-- Layer 2: HUD overlays (float above canvas) -->
@@ -83,7 +44,7 @@ function navigateToProduct(slug: string) {
           <span class="corner bl" />
           <span class="corner br" />
 
-          <span class="unit-label font-press">{{ item.label }}</span>
+          <span class="unit-label font-press">{{ product.name }}</span>
           <span class="slot-status font-press">// AWAITING DROP //</span>
         </div>
       </div>
