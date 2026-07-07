@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { useRouter } from 'vue-router'
 import GlitchText from '@/components/GlitchText.vue'
+import logoUrl from '@/assets/picture/chyo-blanc.svg'
 
 const router = useRouter()
 </script>
@@ -66,7 +67,16 @@ const router = useRouter()
       </div>
 
       <!-- Footer -->
-      <p class="mt-5 text-center text-[8px] tracking-wide" style="color: rgba(255,255,255,0.18)">
+      <div class="mt-5 flex justify-center">
+        <img
+          :src="logoUrl"
+          alt="EHYO"
+          class="h-8 sm:h-10 w-auto select-none pointer-events-none opacity-40"
+          :style="{ filter: 'drop-shadow(0 0 8px rgba(0, 234, 255, 0.2))' }"
+        />
+      </div>
+
+      <p class="mt-3 text-center text-[8px] tracking-wide" style="color: rgba(255,255,255,0.18)">
         © 2025 EHYO —
         <span style="color: rgba(0,234,255,0.3)">TERMS</span> ·
         <span style="color: rgba(255,0,204,0.3)">PRIVACY</span>

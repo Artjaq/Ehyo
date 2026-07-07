@@ -2,6 +2,7 @@
 import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import GlitchText from '@/components/GlitchText.vue'
+import logoUrl from '@/assets/picture/chyo-blanc.svg'
 
 const router = useRouter()
 
@@ -98,7 +99,16 @@ onMounted(() => {
           transition: 'opacity 0.4s 0.28s',
         }"
       >
-        <p class="footer-line font-press mt-6 text-center">
+        <div class="mt-6 flex justify-center">
+          <img
+            :src="logoUrl"
+            alt="EHYO"
+            class="h-8 sm:h-10 w-auto select-none pointer-events-none opacity-40"
+            :style="{ filter: 'drop-shadow(0 0 8px rgba(255, 0, 204, 0.2))' }"
+          />
+        </div>
+
+        <p class="footer-line font-press mt-3 text-center">
           © 2025 EHYO —
           <span style="color: rgba(0,234,255,0.3)">TERMS</span> ·
           <span style="color: rgba(255,0,204,0.3)">PRIVACY</span>

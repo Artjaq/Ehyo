@@ -53,7 +53,7 @@ const handleClick = () => {
   >
     <Button
       @click="handleClick"
-      class="font-press px-15 py-4 text-xl uppercase tracking-wider bg-zinc-950 text-[#00eaff] hover:bg-zinc-900 border border-[#00eaff]/40 hover:border-[#00eaff]/70 rounded-xl transition-colors"
+      class="font-press px-10 py-4 text-lg sm:px-20 sm:py-6 sm:text-2xl md:px-24 md:py-7 md:text-3xl uppercase tracking-wider bg-zinc-950 text-[#00eaff] hover:bg-zinc-900 border border-[#00eaff]/40 hover:border-[#00eaff]/70 rounded-xl transition-colors"
     >
       START
     </Button>

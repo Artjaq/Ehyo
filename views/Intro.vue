@@ -16,14 +16,14 @@ const handleStartClick = () => {
     <img
       :src="logoUrl"
       alt="EHYO"
-      class="h-24 sm:h-32 md:h-40 lg:h-48 w-auto select-none pointer-events-none"
+      class="h-28 sm:h-44 md:h-64 lg:h-80 w-auto select-none pointer-events-none"
       :style="{
         filter: 'drop-shadow(0 0 12px rgba(0, 234, 255, 0.25)) drop-shadow(0 0 24px rgba(0, 234, 255, 0.12))'
       }"
     />
 
-    <section class="crt text-center px-6 sm:px-12 py-8 sm:py-12 border border-zinc-700/80 bg-zinc-950/70 rounded-2xl">
-      <GlitchText text="ENTER TO EHYO" class="text-5xl md:text-7xl" />
+    <section class="crt text-center px-4 sm:px-8 py-4 sm:py-6 border border-zinc-700/80 bg-zinc-950/70 rounded-2xl">
+      <GlitchText text="ENTER TO EHYO" class="text-3xl sm:text-5xl md:text-7xl lg:text-8xl" />
     </section>
 
     <StartButton :on-click="handleStartClick" />
