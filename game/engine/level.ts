@@ -287,6 +287,11 @@ export interface Decal {
   a: number
 }
 export interface Sign { x: number; y: number; txt: string }
+// Logos du site intégrés au décor. Canvases teintés fournis par le moteur
+// (null tant que le SVG n'est pas chargé — on saute simplement le dessin).
+export interface LogoKit { white: CanvasImageSource | null; black: CanvasImageSource | null }
+export interface WallLogo { x: number; y: number; w: number; variant: 'white' | 'black' }
+export interface FloorLogo { x: number; y: number; w: number; rot: number }
 export interface Puddle { x: number; y: number; r: number; col: string }
 export interface Obstacle { x: number; y: number; r: number }
 export interface Pillar { x: number; y: number }
@@ -313,6 +318,8 @@ export class Level {
   obstacles: Obstacle[] = []
   pillars: Pillar[] = []
   benches: Bench[] = []
+  floorLogo: FloorLogo | null = null // logo blanc au sol : UN SEUL par niveau
+  wallLogos: WallLogo[] = []
   chunkNames: string[] = [] // pour debug/inspection
 
   private walkCells: number[] = [] // indices de cellules jouables (spawn sampling)
@@ -545,6 +552,26 @@ export class Level {
       })
       signBudget--
     }
+    // Logo BLANC au sol : un seul exemplaire par niveau, peint au point de départ
+    // (le joueur démarre dessus, comme une marque de spawn à la bombe).
+    this.floorLogo = { x: this.spawnX, y: this.spawnY, w: 220, rot: (Math.random() - 0.5) * 0.2 }
+
+    // Logos muraux sur les façades : le blanc se bombe directement sur la brique,
+    // le noir repose TOUJOURS sur un carré blanc (consigne d'usage de la marque).
+    let logoBudget = 6
+    let whiteTurn = true
+    for (const i of shuffle(facadeCells.slice())) {
+      if (logoBudget <= 0) break
+      const c = this.cellCenter(i)
+      if (this.signs.some((s) => Math.hypot(s.x - c.x, s.y - c.y) < 220)) continue
+      if (this.wallLogos.some((l) => Math.hypot(l.x - c.x, l.y - c.y) < CELL * 2.5)) continue
+      this.wallLogos.push({ x: c.x, y: c.y - 8, w: whiteTurn ? 104 : 72, variant: whiteTurn ? 'white' : 'black' })
+      whiteTurn = !whiteTurn
+      logoBudget--
+    }
+    // Dégage les graffitis d'ambiance autour des logos muraux (pas de recouvrement).
+    this.decals = this.decals.filter((d) => this.wallLogos.every((l) => Math.hypot(d.x - l.x, d.y - l.y) > 130))
+
     // Flaques avec reflets néon
     const puddleCount = Math.min(16, (this.walkCells.length / 18) | 0)
     for (let i = 0; i < puddleCount; i++) {
@@ -587,6 +614,7 @@ export class Level {
     ctx: CanvasRenderingContext2D,
     camX: number, camY: number, vw: number, vh: number,
     tilePattern: CanvasPattern,
+    logos?: LogoKit,
   ): void {
     const c0x = Math.max(0, Math.floor((camX - 8) / CELL))
     const c1x = Math.min(this.cols - 1, Math.floor((camX + vw + 8) / CELL))
@@ -606,7 +634,7 @@ export class Level {
           this.drawFacade(ctx, x, y)
         } else {
           // Toit / vide urbain
-          ctx.fillStyle = '#0b0c0f'
+          ctx.fillStyle = '#04070e'
           ctx.fillRect(x, y, CELL, CELL)
           ctx.save()
           ctx.globalAlpha = 0.1
@@ -631,11 +659,11 @@ export class Level {
           ctx.fillStyle = g
           ctx.fillRect(x, y, CELL, 30)
         }
-        // Lisière basse : lip + ligne jaune (ADN du quai de métro)
+        // Lisière basse : lip + ligne ambre (ADN du quai de métro)
         if (!this.cellWalkable(cx, cy + 1)) {
           ctx.fillStyle = '#33353b'
           ctx.fillRect(x, y + CELL - 14, CELL, 14)
-          ctx.fillStyle = 'rgba(232,255,51,.55)'
+          ctx.fillStyle = 'rgba(255,170,0,.6)'
           ctx.fillRect(x, y + CELL - 10, CELL, 5)
           ctx.fillStyle = '#0a0b0d'
           ctx.fillRect(x, y + CELL - 3, CELL, 3)
@@ -662,6 +690,20 @@ export class Level {
       }
     }
 
+    // Logo blanc peint au sol (unique par niveau) — sous les entités et les splats.
+    if (this.floorLogo && logos?.white) {
+      const f = this.floorLogo
+      if (!(f.x < camX - 200 || f.x > camX + vw + 200 || f.y < camY - 200 || f.y > camY + vh + 200)) {
+        const h = f.w * 0.75
+        ctx.save()
+        ctx.translate(f.x, f.y)
+        ctx.rotate(f.rot)
+        ctx.globalAlpha = 0.5
+        ctx.drawImage(logos.white, -f.w / 2, -h / 2, f.w, h)
+        ctx.restore()
+      }
+    }
+
     // Flaques (reflets néon au sol)
     for (const pd of this.puddles) {
       if (pd.x < camX - 100 || pd.x > camX + vw + 100 || pd.y < camY - 100 || pd.y > camY + vh + 100) continue
@@ -678,21 +720,46 @@ export class Level {
     ctx.textAlign = 'center'
     for (const s of this.signs) {
       if (s.x < camX - 200 || s.x > camX + vw + 200 || s.y < camY - 120 || s.y > camY + vh + 120) continue
-      const w = 30 + s.txt.length * 15
+      const w = 24 + s.txt.length * 11
       ctx.fillStyle = '#0c0d10'
       ctx.fillRect(s.x - w / 2 - 3, s.y - 3, w + 6, 46)
       ctx.fillStyle = '#e9e6dc'
       ctx.fillRect(s.x - w / 2, s.y, w, 40)
       ctx.fillStyle = '#15171b'
-      ctx.font = "700 17px 'Silkscreen', monospace"
-      ctx.fillText(s.txt, s.x, s.y + 27)
+      ctx.font = "10px 'Press Start 2P', monospace"
+      ctx.fillText(s.txt, s.x, s.y + 25)
     }
     ctx.textAlign = 'left'
+
+    // Logos muraux sur les façades
+    if (logos) {
+      for (const lg of this.wallLogos) {
+        if (lg.x < camX - 160 || lg.x > camX + vw + 160 || lg.y < camY - 160 || lg.y > camY + vh + 160) continue
+        const img = lg.variant === 'white' ? logos.white : logos.black
+        if (!img) continue
+        const h = lg.w * 0.75
+        if (lg.variant === 'black') {
+          // Consigne de marque : le logo noir repose toujours sur un carré blanc.
+          const s = lg.w + 22
+          ctx.fillStyle = '#0c0d10'
+          ctx.fillRect(lg.x - s / 2 - 3, lg.y - s / 2 - 3, s + 6, s + 6)
+          ctx.fillStyle = '#f4f6f7'
+          ctx.fillRect(lg.x - s / 2, lg.y - s / 2, s, s)
+          ctx.drawImage(img, lg.x - lg.w / 2, lg.y - h / 2, lg.w, h)
+        } else {
+          // Blanc : bombé directement sur la brique
+          ctx.save()
+          ctx.globalAlpha = 0.88
+          ctx.drawImage(img, lg.x - lg.w / 2, lg.y - h / 2, lg.w, h)
+          ctx.restore()
+        }
+      }
+    }
   }
 
   // Façade de brique avec assises, bandeau et pied de mur.
   private drawFacade(ctx: CanvasRenderingContext2D, x: number, y: number): void {
-    ctx.fillStyle = '#141519'
+    ctx.fillStyle = '#10131b'
     ctx.fillRect(x, y, CELL, CELL)
     // assises de briques
     ctx.strokeStyle = 'rgba(255,255,255,.055)'
@@ -714,7 +781,7 @@ export class Level {
       }
     }
     // bandeau coloré + pied de mur
-    ctx.fillStyle = '#4b1230'
+    ctx.fillStyle = '#420f38'
     ctx.fillRect(x, y + CELL - 28, CELL, 10)
     ctx.fillStyle = '#0a0b0d'
     ctx.fillRect(x, y + CELL - 8, CELL, 8)

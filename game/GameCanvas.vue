@@ -24,7 +24,7 @@ const props = withDefaults(
     neon?: string
     difficulty?: 'easy' | 'normal' | 'hard'
   }>(),
-  { neon: '#ff2fb9', difficulty: 'normal' },
+  { neon: '#ff00cc', difficulty: 'normal' },
 )
 
 // --- éléments DOM ---
@@ -185,34 +185,38 @@ onBeforeUnmount(() => {
       <div ref="aimJoyStick" class="ngs-joystick aim"></div>
     </div>
 
-    <!-- ÉCRAN TITRE -->
+    <!-- ÉCRAN TITRE (panneau style "terminal" de la marque) -->
     <div v-if="screen === 'start'" class="ngs-overlay ngs-start">
-      <div class="ngs-kicker">— A 3AM STREET RUN —</div>
-      <h1 class="ngs-title">
-        <span class="t1">NEON</span><br />
-        <span class="t2">GRAFFITI</span>
-        <span class="t3">SURVIVOR</span>
-      </h1>
-      <p class="ngs-pitch">
-        Hold the block. Aim your can and spray the heat yourself —
-        grab spilled paint to unlock heavier tools.
-      </p>
-      <div class="ngs-help">
-        WASD MOVE · MOUSE AIM · HOLD CLICK TO SPRAY · 1-4 SWAP<br />
-        ON TOUCH: LEFT STICK MOVE · RIGHT STICK AIM &amp; FIRE
+      <div class="ngs-panel">
+        <div class="ngs-kicker">— A 3AM STREET RUN —</div>
+        <h1 class="ngs-title">
+          <span class="t1">NEON</span><br />
+          <span class="t2">GRAFFITI</span>
+          <span class="t3">SURVIVOR</span>
+        </h1>
+        <p class="ngs-pitch">
+          Hold the block. Aim your can and spray the heat yourself —
+          grab spilled paint to unlock heavier tools.
+        </p>
+        <div class="ngs-help">
+          WASD MOVE · MOUSE AIM · HOLD CLICK TO SPRAY · 1-4 SWAP<br />
+          ON TOUCH: LEFT STICK MOVE · RIGHT STICK AIM &amp; FIRE
+        </div>
+        <button class="ngs-cta" @click="start">START RUN ▸</button>
       </div>
-      <button class="ngs-cta" @click="start">START RUN ▸</button>
     </div>
 
     <!-- GAME OVER -->
     <div v-if="screen === 'over'" class="ngs-overlay ngs-gameover">
-      <div class="ngs-busted">BUSTED</div>
-      <div class="ngs-final">
-        You held out for <b class="c2">{{ finalStats.time }}</b> ·
-        <b class="c3">{{ finalStats.kills }}</b> tagged ·
-        <b class="cw">{{ finalStats.paint }}</b> paint
+      <div class="ngs-panel">
+        <div class="ngs-busted">BUSTED</div>
+        <div class="ngs-final">
+          You held out for <b class="c2">{{ finalStats.time }}</b> ·
+          <b class="c3">{{ finalStats.kills }}</b> tagged ·
+          <b class="cw">{{ finalStats.paint }}</b> paint
+        </div>
+        <button class="ngs-cta cta2" @click="start">RUN IT BACK ▸</button>
       </div>
-      <button class="ngs-cta cta2" @click="start">RUN IT BACK ▸</button>
     </div>
   </div>
 </template>
@@ -221,13 +225,15 @@ onBeforeUnmount(() => {
 .ngs {
   position: absolute;
   inset: 0;
-  --neon: #ff2fb9;
-  --neon2: #22e0e0;
-  --neon3: #e8ff33;
-  --neon4: #6cff3a;
-  background: #0a0a0c;
+  /* Accents néon de la marque du site */
+  --neon: #ff00cc;
+  --neon2: #00eaff;
+  --neon3: #ffaa00;
+  --neon4: #39ff14;
+  --glitch: #ff004c;
+  background: #00040a;
   overflow: hidden;
-  font-family: 'VT323', monospace;
+  font-family: 'Geist Mono', monospace;
   color: #e9edf2;
   user-select: none;
   -webkit-user-select: none;
@@ -279,8 +285,8 @@ onBeforeUnmount(() => {
 }
 .ngs-paintbar {
   height: 12px;
-  border: 2px solid #17181c;
-  background: #141518;
+  border: 2px solid #0e141c;
+  background: #060b12;
   box-shadow: 0 0 0 2px #000;
   overflow: hidden;
 }
@@ -295,20 +301,20 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   gap: 18px;
-  font-family: 'Silkscreen', monospace;
-  font-size: 15px;
+  font-family: 'Press Start 2P', monospace;
+  font-size: 10px;
   letter-spacing: 1px;
   flex-wrap: wrap;
 }
 .ngs-paint { color: var(--neon2); text-shadow: 0 0 10px var(--neon2); }
-.ngs-next { color: #8a9098; font-size: 11px; letter-spacing: 2px; }
+.ngs-next { color: #8a9098; font-size: 8px; letter-spacing: 2px; }
 .ngs-time { color: #e9edf2; text-shadow: 0 0 8px rgba(233, 237, 242, 0.5); }
 .ngs-kills { color: var(--neon3); text-shadow: 0 0 10px var(--neon3); }
 .ngs-spacer { flex: 1; }
 .ngs-hpwrap { width: min(320px, 64%); align-self: center; }
 .ngs-hplabel {
-  font-family: 'Silkscreen', monospace;
-  font-size: 11px;
+  font-family: 'Press Start 2P', monospace;
+  font-size: 8px;
   letter-spacing: 1px;
   color: #b9c0c8;
   margin-bottom: 4px;
@@ -317,16 +323,16 @@ onBeforeUnmount(() => {
 }
 .ngs-hpbar {
   height: 16px;
-  border: 2px solid #17181c;
-  background: #141518;
+  border: 2px solid #0e141c;
+  background: #060b12;
   box-shadow: 0 0 0 2px #000;
   overflow: hidden;
 }
 .ngs-hpfill {
   height: 100%;
   width: 100%;
-  background: linear-gradient(90deg, #ff2f5e, #ff7a1a);
-  box-shadow: 0 0 12px rgba(255, 60, 80, 0.7);
+  background: linear-gradient(90deg, #ff004c, #ffaa00);
+  box-shadow: 0 0 12px rgba(255, 0, 76, 0.6);
   transition: width 0.1s linear;
 }
 
@@ -343,10 +349,10 @@ onBeforeUnmount(() => {
   width: 46px;
   height: 46px;
   cursor: pointer;
-  background: rgba(19, 20, 24, 0.9);
-  border: 2px solid #2a2d33;
+  background: rgba(0, 4, 10, 0.9);
+  border: 2px solid rgba(0, 234, 255, 0.12);
   color: inherit;
-  font-family: 'Silkscreen', monospace;
+  font-family: 'Press Start 2P', monospace;
   display: grid;
   place-items: center;
   transition: transform 0.08s;
@@ -355,18 +361,18 @@ onBeforeUnmount(() => {
 .ngs-slot.locked { cursor: default; opacity: 0.65; }
 .ngs-slotkey {
   position: absolute;
-  top: 1px;
+  top: 3px;
   left: 4px;
-  font-size: 8px;
+  font-size: 7px;
   color: #6b7076;
 }
-.ngs-slottag { font-size: 18px; text-shadow: 0 0 10px currentColor; }
+.ngs-slottag { font-size: 13px; text-shadow: 0 0 10px currentColor; }
 .ngs-slot.locked .ngs-slottag { text-shadow: none; }
 .ngs-slotcost {
   position: absolute;
-  bottom: 1px;
+  bottom: 3px;
   right: 4px;
-  font-size: 8px;
+  font-size: 7px;
   color: #8a9098;
 }
 
@@ -382,11 +388,11 @@ onBeforeUnmount(() => {
   transform: translate(-50%, 0);
   z-index: 9;
   pointer-events: none;
-  font-family: 'Silkscreen', monospace;
-  font-size: 13px;
+  font-family: 'Press Start 2P', monospace;
+  font-size: 9px;
   letter-spacing: 1px;
   color: #e9edf2;
-  background: rgba(10, 10, 14, 0.92);
+  background: rgba(0, 4, 10, 0.92);
   border: 2px solid;
   padding: 10px 18px;
   animation: ngs-toast-in 0.22s ease both;
@@ -430,19 +436,30 @@ onBeforeUnmount(() => {
   text-align: center;
   padding: 24px;
 }
-.ngs-start { background: radial-gradient(90% 80% at 50% 40%, rgba(20, 10, 26, 0.55), rgba(5, 5, 7, 0.9)); }
+/* Panneau "terminal" de la marque : fond sombre, bordure et glow cyan */
+.ngs-panel {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  background: rgba(0, 4, 10, 0.88);
+  border: 1px solid rgba(0, 234, 255, 0.12);
+  border-radius: 14px;
+  padding: 34px 40px;
+  box-shadow: 0 0 46px rgba(0, 234, 255, 0.2);
+  max-width: min(640px, 92vw);
+}
+.ngs-start { background: radial-gradient(90% 80% at 50% 40%, rgba(10, 0, 16, 0.55), rgba(0, 4, 10, 0.9)); }
 .ngs-kicker {
-  font-family: 'Silkscreen', monospace;
-  font-size: 11px;
-  letter-spacing: 5px;
+  font-family: 'Press Start 2P', monospace;
+  font-size: 9px;
+  letter-spacing: 4px;
   color: #8a9098;
   margin-bottom: 16px;
 }
 .ngs-title {
-  font-family: 'Silkscreen', monospace;
-  font-weight: 700;
-  font-size: clamp(30px, 7vw, 66px);
-  line-height: 1.05;
+  font-family: 'Press Start 2P', monospace;
+  font-size: clamp(17px, 4.2vw, 40px);
+  line-height: 1.45;
   letter-spacing: 1px;
   margin: 0;
 }
@@ -450,30 +467,30 @@ onBeforeUnmount(() => {
 .ngs-title .t2 { color: var(--neon2); text-shadow: 0 0 22px var(--neon2), 4px 4px 0 #061214; }
 .ngs-title .t3 { color: var(--neon3); text-shadow: 0 0 22px var(--neon3), 4px 4px 0 #14140a; }
 .ngs-pitch {
-  font-size: 24px;
-  line-height: 1.35;
+  font-size: 14px;
+  line-height: 1.6;
   color: #c7ced5;
-  max-width: 520px;
+  max-width: 480px;
   margin: 20px 0 4px;
 }
 .ngs-help {
-  font-family: 'Silkscreen', monospace;
-  font-size: 11px;
+  font-family: 'Press Start 2P', monospace;
+  font-size: 8px;
   letter-spacing: 2px;
-  line-height: 1.9;
+  line-height: 2.2;
   color: #7d848c;
   margin: 14px 0 26px;
 }
 .ngs-cta {
   pointer-events: auto;
   cursor: pointer;
-  font-family: 'Silkscreen', monospace;
-  font-size: 20px;
+  font-family: 'Press Start 2P', monospace;
+  font-size: 12px;
   letter-spacing: 2px;
-  color: #0a0a0c;
+  color: #00040a;
   background: var(--neon);
   border: none;
-  padding: 18px 42px;
+  padding: 16px 34px;
   box-shadow: 6px 6px 0 #120a10, 0 0 28px var(--neon);
   transition: transform 0.08s;
 }
@@ -481,22 +498,22 @@ onBeforeUnmount(() => {
 .ngs-cta:active { transform: translate(2px, 2px); box-shadow: 3px 3px 0 #120a10; }
 .ngs-cta.cta2 {
   background: var(--neon2);
-  font-size: 19px;
-  padding: 16px 38px;
+  font-size: 12px;
+  padding: 14px 30px;
   box-shadow: 6px 6px 0 #061214, 0 0 26px var(--neon2);
 }
 .ngs-cta.cta2:hover { box-shadow: 8px 8px 0 #061214, 0 0 32px var(--neon2); }
 
-/* game over */
-.ngs-gameover { background: radial-gradient(90% 80% at 50% 45%, rgba(40, 6, 20, 0.6), rgba(5, 5, 7, 0.92)); z-index: 22; }
+/* game over : rouge glitch de la marque */
+.ngs-gameover { background: radial-gradient(90% 80% at 50% 45%, rgba(28, 0, 14, 0.62), rgba(0, 4, 10, 0.92)); z-index: 22; }
 .ngs-busted {
-  font-family: 'Silkscreen', monospace;
-  font-size: clamp(28px, 6vw, 58px);
+  font-family: 'Press Start 2P', monospace;
+  font-size: clamp(18px, 4vw, 34px);
   letter-spacing: 1px;
-  color: var(--neon);
-  text-shadow: 0 0 24px var(--neon), 4px 4px 0 #120a10;
+  color: var(--glitch);
+  text-shadow: 0 0 24px var(--glitch), 4px 4px 0 #120a10;
 }
-.ngs-final { font-size: 24px; color: #c7ced5; margin: 18px 0 22px; }
+.ngs-final { font-size: 14px; line-height: 1.7; color: #c7ced5; margin: 18px 0 22px; }
 .ngs-final .c2 { color: var(--neon2); }
 .ngs-final .c3 { color: var(--neon3); }
 .ngs-final .cw { color: #fff; }

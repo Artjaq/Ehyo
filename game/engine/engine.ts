@@ -12,7 +12,8 @@
 // basse fréquence + un hook HUD par frame écrit en DOM direct côté composant.
 
 import { buildGlows, buildSprites, buildTile, drawSprite, NEONS, type BakedSprite } from './sprites'
-import { generateLevel, Level } from './level'
+import { generateLevel, Level, type LogoKit } from './level'
+import logoBlackUrl from '../src/logo-black.svg'
 
 // ---------------------------------------------------------------------------
 // Types publics (contrat moteur ↔ composant Vue)
@@ -90,13 +91,13 @@ interface WeaponDef {
 function makeWeapons(): WeaponDef[] {
   return [
     // Tir direct rapide : l'arme de base, précise à moyenne portée.
-    { id: 'spray', slot: 1, name: 'SPRAY CAN', tag: 'S', color: '#22e0e0', cost: 0, rate: 0.16, cd: 0, unlocked: true },
+    { id: 'spray', slot: 1, name: 'SPRAY CAN', tag: 'S', color: '#00eaff', cost: 0, rate: 0.16, cd: 0, unlocked: true },
     // Éventail : 5 gouttes en cône, contrôle de foule à courte-moyenne portée.
-    { id: 'fan', slot: 2, name: 'FAT CAP', tag: 'F', color: '#e8ff33', cost: 35, rate: 0.55, cd: 0, unlocked: false },
+    { id: 'fan', slot: 2, name: 'FAT CAP', tag: 'F', color: '#ffaa00', cost: 35, rate: 0.55, cd: 0, unlocked: false },
     // Bombe lobée : explose en zone à l'impact (le splat signature du proto).
-    { id: 'bomb', slot: 3, name: 'PAINT BOMB', tag: 'B', color: '#ff2fb9', cost: 100, rate: 0.9, cd: 0, unlocked: false },
+    { id: 'bomb', slot: 3, name: 'PAINT BOMB', tag: 'B', color: '#ff00cc', cost: 100, rate: 0.9, cd: 0, unlocked: false },
     // Jet d'aérosol continu : lance-flamme courte portée, gros DPS risqué.
-    { id: 'aero', slot: 4, name: 'AERO TORCH', tag: 'A', color: '#6cff3a', cost: 200, rate: 0.045, cd: 0, unlocked: false },
+    { id: 'aero', slot: 4, name: 'AERO TORCH', tag: 'A', color: '#39ff14', cost: 200, rate: 0.045, cd: 0, unlocked: false },
   ]
 }
 
@@ -172,8 +173,9 @@ export class GameEngine {
   private aimJoyBase!: HTMLElement
   private aimJoyStick!: HTMLElement
   private hooks!: EngineHooks
-  private neon = '#ff2fb9'
+  private neon = '#ff00cc'
   private dm = 1
+  private logos: LogoKit = { white: null, black: null }
 
   private spr!: Record<string, BakedSprite>
   private glows!: Record<string, HTMLCanvasElement>
@@ -223,7 +225,7 @@ export class GameEngine {
     this.aimJoyBase = opts.aimJoyBase
     this.aimJoyStick = opts.aimJoyStick
     this.hooks = opts.hooks
-    this.neon = opts.neon || '#ff2fb9'
+    this.neon = opts.neon || '#ff00cc'
     this.dm = { easy: 0.8, normal: 1, hard: 1.35 }[opts.difficulty || 'normal']
 
     this.ctx = this.canvas.getContext('2d')!
@@ -233,7 +235,8 @@ export class GameEngine {
     this.shadow = gk.shadow
     this.tilePattern = this.ctx.createPattern(buildTile(), 'repeat')!
 
-    document.fonts?.load("700 16px 'Silkscreen'").catch(() => {})
+    document.fonts?.load("12px 'Press Start 2P'").catch(() => {})
+    this.loadLogos()
 
     const sig = this.ac.signal
     window.addEventListener('keydown', this.onKey, { signal: sig })
@@ -260,6 +263,31 @@ export class GameEngine {
     this.ac.abort()
     this.ro?.disconnect()
     this.ro = null
+  }
+
+  // Charge le logo du site et prépare deux teintes sur canvas offscreen.
+  // NB : le fichier "logo-blanc.svg" fourni est un pochoir inversé (feuille
+  // blanche pleine, logo évidé) — on part donc du NOIR (formes propres sur fond
+  // transparent) et on le teinte, ce qui donne les deux variantes fiables.
+  private loadLogos(): void {
+    const img = new Image()
+    img.onload = () => {
+      if (this.destroyed) return
+      const tint = (color: string): HTMLCanvasElement => {
+        const c = document.createElement('canvas')
+        c.width = 512
+        c.height = 384 // ratio 4:3 du logo
+        const x = c.getContext('2d')!
+        x.drawImage(img, 0, 0, c.width, c.height)
+        x.globalCompositeOperation = 'source-in'
+        x.fillStyle = color
+        x.fillRect(0, 0, c.width, c.height)
+        return c
+      }
+      this.logos.white = tint('#ffffff')
+      this.logos.black = tint('#050608')
+    }
+    img.src = logoBlackUrl
   }
 
   // (Re)génère un monde + état frais. Nouveau layout de rues à chaque run.
@@ -707,11 +735,11 @@ export class GameEngine {
 
     switch (w.id) {
       case 'spray':
-        this.spawnShot(mx, my, base, 520, 10, 4, 1.1, '#22e0e0', 'shot')
+        this.spawnShot(mx, my, base, 520, 10, 4, 1.1, '#00eaff', 'shot')
         break
       case 'fan':
         // 5 gouttes en cône (~28°)
-        for (let i = 0; i < 5; i++) this.spawnShot(mx, my, base + (i - 2) * 0.12, 470, 7, 4, 0.75, '#e8ff33', 'shot')
+        for (let i = 0; i < 5; i++) this.spawnShot(mx, my, base + (i - 2) * 0.12, 470, 7, 4, 0.75, '#ffaa00', 'shot')
         break
       case 'bomb': {
         const tx = p.x + p.aimX * BOMB_THROW
@@ -724,7 +752,7 @@ export class GameEngine {
         for (let i = 0; i < 2; i++) {
           const jitter = (Math.random() - 0.5) * 0.3
           const spd = 340 + Math.random() * 120
-          this.spawnShot(mx, my, base + jitter, spd, 4, 3, 0.26 + Math.random() * 0.1, Math.random() < 0.5 ? '#6cff3a' : '#d0ff2a', 'aero')
+          this.spawnShot(mx, my, base + jitter, spd, 4, 3, 0.26 + Math.random() * 0.1, Math.random() < 0.5 ? '#39ff14' : '#8aff5c', 'aero')
         }
         break
     }
@@ -897,7 +925,7 @@ export class GameEngine {
     ctx.save()
     ctx.translate(-this.cam.x + sx, -this.cam.y + sy)
 
-    this.level.draw(ctx, this.cam.x, this.cam.y, this.vw, this.vh, this.tilePattern)
+    this.level.draw(ctx, this.cam.x, this.cam.y, this.vw, this.vh, this.tilePattern, this.logos)
 
     // Graffitis d'ambiance
     for (const d of this.level.decals) {
@@ -906,7 +934,7 @@ export class GameEngine {
       ctx.translate(d.x, d.y)
       ctx.rotate(d.rot)
       ctx.globalAlpha = d.a
-      ctx.font = `700 ${d.sz}px 'Silkscreen', monospace`
+      ctx.font = `${d.sz}px 'Press Start 2P', monospace`
       ctx.fillStyle = d.col
       ctx.fillText(d.txt, 0, 0)
       ctx.restore()
@@ -1035,7 +1063,7 @@ export class GameEngine {
     for (const tg of this.tags) {
       ctx.save()
       ctx.globalAlpha = Math.min(1, tg.life * 1.6)
-      ctx.font = "700 16px 'Silkscreen', monospace"
+      ctx.font = "12px 'Press Start 2P', monospace"
       ctx.textAlign = 'center'
       ctx.fillStyle = '#0a0a0c'
       ctx.fillText(tg.txt, tg.x + 2, tg.y + 2)
@@ -1064,7 +1092,7 @@ export class GameEngine {
     ctx.fillRect(x - s / 2, y + s / 2 - 14, s, 14)
     const seg = s / 6
     for (let i = 0; i < 6; i++) {
-      ctx.fillStyle = i % 2 ? '#e8ff33' : '#17181c'
+      ctx.fillStyle = i % 2 ? '#ffaa00' : '#17181c'
       ctx.fillRect(x - s / 2 + i * seg, y + s / 2 - 6, seg, 6)
     }
     ctx.fillStyle = NEONS[((x / 560) | 0) % 4]

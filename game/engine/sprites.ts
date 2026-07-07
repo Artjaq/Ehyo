@@ -1,8 +1,11 @@
 // Sprites pixel art générés par code : rects colorés "bakés" sur des canvas offscreen.
 // Zéro asset externe — tout le rendu rétro vient d'ici (repris du prototype Canvas 2D).
 
-// Palette néon du jeu : magenta dominant + cyan / jaune / lime en accents.
-export const NEONS = ['#ff2fb9', '#22e0e0', '#e8ff33', '#6cff3a']
+// Palette néon du jeu = accents de la marque du site :
+// magenta dominant + cyan / ambre / vert. Le rouge glitch (#ff004c) est réservé
+// au danger (drones, HP, game over).
+export const NEONS = ['#ff00cc', '#00eaff', '#ffaa00', '#39ff14']
+export const GLITCH_RED = '#ff004c'
 
 export interface BakedSprite {
   cv: HTMLCanvasElement
@@ -43,37 +46,37 @@ export function buildSprites(neon: string): Record<string, BakedSprite> {
     // Joueur : silhouette de tagueur, hoodie + sac de bombes magenta
     player: {
       w: 12, h: 14, anchor: 'foot', glow: neon,
-      pal: { g: '#7a7f86', f: '#22252b', c: '#22e0e0', m: neon, s: '#e3e7ec', d: '#43464c', k: '#0b0b0d' },
+      pal: { g: '#7a7f86', f: '#22252b', c: '#00eaff', m: neon, s: '#e3e7ec', d: '#43464c', k: '#0b0b0d' },
       r: [[3, 0, 6, 1, 'k'], [3, 1, 6, 5, 'g'], [4, 3, 4, 2, 'f'], [2, 6, 8, 4, 'g'], [2, 6, 8, 1, 'c'], [9, 6, 2, 4, 'm'], [10, 5, 1, 1, 's'], [3, 10, 2, 4, 'd'], [7, 10, 2, 4, 'd']],
     },
     // Flic : uniforme bleu nuit + visière cyan
     cop: {
-      w: 12, h: 14, anchor: 'foot', glow: '#22e0e0',
-      pal: { b: '#2a3350', h: '#151a2e', v: '#22e0e0', S: '#8f959c', k: '#101218', t: '#3a4256' },
+      w: 12, h: 14, anchor: 'foot', glow: '#00eaff',
+      pal: { b: '#2a3350', h: '#151a2e', v: '#00eaff', S: '#8f959c', k: '#101218', t: '#3a4256' },
       r: [[3, 0, 6, 3, 'h'], [4, 1, 4, 1, 'v'], [3, 3, 6, 7, 'b'], [3, 4, 6, 1, 'k'], [1, 4, 2, 8, 'S'], [1, 4, 2, 1, 'k'], [3, 10, 2, 4, 'k'], [7, 10, 2, 4, 'k']],
     },
     // Buffer : nettoyeur de graffs au rouleau jaune (le "tank")
     buffer: {
-      w: 14, h: 14, anchor: 'foot', glow: '#ff7a1a',
-      pal: { g: '#797d84', f: '#25272c', r: '#ff7a1a', y: '#f4e21a', w: '#5b4626', k: '#101218' },
+      w: 14, h: 14, anchor: 'foot', glow: '#ffaa00',
+      pal: { g: '#797d84', f: '#25272c', r: '#ffaa00', y: '#ffc933', w: '#5b4626', k: '#101218' },
       r: [[4, 0, 5, 2, 'g'], [4, 2, 5, 2, 'f'], [3, 4, 7, 6, 'r'], [3, 4, 7, 1, 'k'], [4, 10, 2, 4, 'g'], [7, 10, 2, 4, 'g'], [10, 5, 1, 4, 'w'], [11, 4, 3, 3, 'y']],
     },
     // Tagueur rival : tout en lime
     tagger: {
-      w: 12, h: 14, anchor: 'foot', glow: '#6cff3a',
-      pal: { G: '#6cff3a', k: '#0e120d', y: '#d0ff2a', d: '#2f3a24', s: '#e3e7ec' },
+      w: 12, h: 14, anchor: 'foot', glow: '#39ff14',
+      pal: { G: '#39ff14', k: '#0e120d', y: '#8aff5c', d: '#2f3a24', s: '#e3e7ec' },
       r: [[3, 0, 6, 1, 'k'], [3, 1, 6, 5, 'G'], [4, 3, 4, 2, 'k'], [2, 6, 8, 5, 'G'], [9, 7, 2, 3, 'y'], [10, 6, 1, 1, 's'], [3, 11, 2, 3, 'd'], [7, 11, 2, 3, 'd']],
     },
     // Chien de garde : rapide, profil bas
     dog: {
       w: 14, h: 9, anchor: 'foot', glow: neon,
-      pal: { d: '#4a4d52', c: '#22e0e0', r: '#ff3b3b', k: '#0e0f12' },
+      pal: { d: '#4a4d52', c: '#00eaff', r: '#ff004c', k: '#0e0f12' },
       r: [[2, 2, 9, 4, 'd'], [10, 1, 4, 3, 'd'], [12, 2, 1, 1, 'r'], [9, 2, 1, 4, 'c'], [1, 3, 1, 2, 'd'], [3, 6, 1, 3, 'k'], [5, 6, 1, 3, 'k'], [8, 6, 1, 3, 'k'], [11, 6, 1, 3, 'k']],
     },
     // Drone de surveillance : vole (ignore murs et obstacles)
     drone: {
-      w: 12, h: 10, anchor: 'center', glow: '#ff3b3b',
-      pal: { p: '#9aa0a6', b: '#2a2d33', r: '#ff3b3b', k: '#121418' },
+      w: 12, h: 10, anchor: 'center', glow: '#ff004c',
+      pal: { p: '#9aa0a6', b: '#2a2d33', r: '#ff004c', k: '#121418' },
       r: [[0, 0, 4, 1, 'p'], [8, 0, 4, 1, 'p'], [1, 1, 10, 1, 'k'], [3, 2, 6, 4, 'b'], [3, 3, 6, 2, 'r'], [3, 5, 6, 1, 'k']],
     },
   }
@@ -109,7 +112,7 @@ export function buildGlows(neon: string): GlowKit {
     x.fill()
     return c
   }
-  ;[neon, '#22e0e0', '#e8ff33', '#6cff3a', '#ff7a1a', '#ff3b3b', '#ffffff'].forEach((c) => (glows[c] = mk(c)))
+  ;[neon, '#00eaff', '#ffaa00', '#39ff14', GLITCH_RED, '#ffffff'].forEach((c) => (glows[c] = mk(c)))
 
   const s = document.createElement('canvas')
   s.width = 64
