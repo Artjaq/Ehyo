@@ -93,17 +93,22 @@ function makeWeapons(): WeaponDef[] {
     // Tir direct rapide : l'arme de base, précise à moyenne portée.
     { id: 'spray', slot: 1, name: 'SPRAY CAN', tag: 'S', color: '#00eaff', cost: 0, rate: 0.16, cd: 0, unlocked: true },
     // Éventail : 5 gouttes en cône, contrôle de foule à courte-moyenne portée.
-    { id: 'fan', slot: 2, name: 'FAT CAP', tag: 'F', color: '#ffaa00', cost: 35, rate: 0.55, cd: 0, unlocked: false },
+    { id: 'fan', slot: 2, name: 'FAT CAP', tag: 'F', color: '#ffaa00', cost: 28, rate: 0.55, cd: 0, unlocked: false },
     // Bombe lobée : explose en zone à l'impact (le splat signature du proto).
-    { id: 'bomb', slot: 3, name: 'PAINT BOMB', tag: 'B', color: '#ff00cc', cost: 100, rate: 0.9, cd: 0, unlocked: false },
+    { id: 'bomb', slot: 3, name: 'PAINT BOMB', tag: 'B', color: '#ff00cc', cost: 80, rate: 0.9, cd: 0, unlocked: false },
     // Jet d'aérosol continu : lance-flamme courte portée, gros DPS risqué.
-    { id: 'aero', slot: 4, name: 'AERO TORCH', tag: 'A', color: '#39ff14', cost: 200, rate: 0.045, cd: 0, unlocked: false },
+    { id: 'aero', slot: 4, name: 'AERO TORCH', tag: 'A', color: '#39ff14', cost: 165, rate: 0.045, cd: 0, unlocked: false },
   ]
 }
 
 const BOMB_THROW = 330 // distance de lancer fixe (la direction vient de la visée)
 const BOMB_RADIUS = 80
 const BOMB_DMG = 40
+
+// Accessibilité : survie du joueur.
+const HIT_IFRAME = 0.45 // invulnérabilité globale après un coup (amortit les nuées)
+const REGEN_DELAY = 3.5 // secondes sans coup avant de récupérer des HP
+const REGEN_RATE = 7 // HP/s régénérés hors combat (récompense le repli)
 
 // ---------------------------------------------------------------------------
 // Entités
@@ -115,6 +120,8 @@ interface PlayerState {
   aimX: number; aimY: number // dernière direction de visée (normalisée)
   firing: boolean
   paint: number // peinture cumulée = monnaie de progression
+  hurt: number // i-frame global : compte à rebours après un coup encaissé
+  safe: number // temps écoulé depuis le dernier coup (déclenche la régén)
 }
 
 type EnemyType = 'dog' | 'tagger' | 'cop' | 'buffer' | 'drone'
@@ -295,9 +302,10 @@ export class GameEngine {
     this.level = generateLevel()
     this.p = {
       x: this.level.spawnX, y: this.level.spawnY,
-      hp: 110, maxHp: 110, speed: 158, face: 1,
+      hp: 130, maxHp: 130, speed: 158, face: 1,
       aimX: 1, aimY: 0, firing: false,
       paint: 0,
+      hurt: 0, safe: 0,
     }
     this.weapons = makeWeapons()
     this.activeId = 'spray'
@@ -571,6 +579,13 @@ export class GameEngine {
       }
     }
 
+    // Survie : i-frame global + régénération hors combat (récupère si on décroche).
+    if (p.hurt > 0) p.hurt -= dt
+    p.safe += dt
+    if (p.safe > REGEN_DELAY && p.hp < p.maxHp) {
+      p.hp = Math.min(p.maxHp, p.hp + REGEN_RATE * dt)
+    }
+
     // Flow field pour le pathing des ennemis au sol.
     this.flowT -= dt
     if (this.flowT <= 0) {
@@ -578,12 +593,12 @@ export class GameEngine {
       L.computeFlow(p.x, p.y)
     }
 
-    // Vagues (inchangé) : intervalle qui se resserre, batch qui grossit.
+    // Vagues : intervalle qui se resserre, batch qui grossit (courbe adoucie).
     this.spawnT -= dt
-    const interval = Math.max(0.3, 1.5 - this.time * 0.013) / this.dm
-    if (this.spawnT <= 0 && this.enemies.length < 240) {
+    const interval = Math.max(0.45, 1.75 - this.time * 0.011) / this.dm
+    if (this.spawnT <= 0 && this.enemies.length < 220) {
       this.spawnT = interval
-      const batch = 1 + Math.floor(this.time / 26)
+      const batch = 1 + Math.floor(this.time / 34)
       for (let i = 0; i < batch; i++) this.spawnEnemy()
     }
 
@@ -605,8 +620,11 @@ export class GameEngine {
       }
       e.face = dx < 0 ? -1 : 1
       e.hitT -= dt
-      if (d < e.size * 0.5 + 12 && e.hitT <= 0) {
+      // Contact : l'ennemi doit être prêt (hitT) ET le joueur hors i-frame global.
+      if (d < e.size * 0.5 + 12 && e.hitT <= 0 && p.hurt <= 0) {
         e.hitT = 0.6
+        p.hurt = HIT_IFRAME
+        p.safe = 0 // toute blessure remet à zéro le délai de régén
         p.hp -= e.dmg * this.dm
         this.shake = Math.min(9, this.shake + 4)
         if (p.hp <= 0) return this.gameOver()
@@ -806,8 +824,8 @@ export class GameEngine {
       ex = pt.x
       ey = pt.y
     }
-    const elite = t > 60 && Math.random() < 0.09
-    const hpScale = 1 + t * 0.012
+    const elite = t > 78 && Math.random() < 0.07
+    const hpScale = 1 + t * 0.010
     this.enemies.push({
       type: key,
       spr: d.spr,
@@ -997,8 +1015,13 @@ export class GameEngine {
         ctx.globalAlpha = 0.5
         ctx.drawImage(this.shadow, p.x - 16, p.y + 2, 32, 13)
         ctx.globalAlpha = 1
-        this.glow(this.neon, p.x, p.y - 6, 34, 0.45)
+        // Halo vert discret quand on régénère (hors combat), sinon halo néon.
+        const regen = p.safe > REGEN_DELAY && p.hp < p.maxHp
+        this.glow(regen ? '#39ff14' : this.neon, p.x, p.y - 6, 34, regen ? 0.5 : 0.45)
+        // Clignotement pendant l'i-frame pour signaler l'invulnérabilité.
+        ctx.globalAlpha = p.hurt > 0 ? 0.45 + 0.3 * Math.sin(this.time * 40) : 1
         drawSprite(ctx, this.spr.player, p.x, p.y, S, p.face)
+        ctx.globalAlpha = 1
       },
     })
     list.sort((a, b) => a.y - b.y)
