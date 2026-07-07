@@ -1,17 +1,23 @@
 <script setup lang="ts">
 // Composant unique <GameCanvas> : encapsule tout le jeu (moteur Canvas 2D custom).
 //
-// Choix d'architecture HUD (hybride, le meilleur des deux mondes) :
-//  - Valeurs par frame (HP, XP, chrono, kills) → écrites en DOM DIRECT via des
-//    template refs, jamais via la réactivité Vue : 60 écritures/s de textContent
-//    et style.width ne coûtent rien, alors que 60 re-renders/s tueraient les perfs.
-//  - Transitions d'écran rares (start / level-up / game over) et cartes
-//    d'amélioration → refs Vue réactives : v-if/v-for restent le moyen le plus
-//    propre de gérer ces overlays, et un re-render toutes les ~30 s est gratuit.
+// Choix d'architecture HUD (hybride) :
+//  - Valeurs par frame (HP, peinture, chrono, kills) → écrites en DOM DIRECT via
+//    des template refs, jamais via la réactivité Vue : 60 écritures/s de
+//    textContent/style.width ne coûtent rien, 60 re-renders/s si.
+//  - Événements rares (écrans start/game over, déblocage d'arme, changement
+//    d'arme active) → refs Vue réactives : v-if/v-for restent le moyen le plus
+//    propre de gérer overlays et barre d'armes.
 // L'état du jeu (positions, ennemis…) vit intégralement dans GameEngine.
 
 import { onBeforeUnmount, onMounted, ref, shallowRef } from 'vue'
-import { GameEngine, type GameOverStats, type HudState, type UpgradeCard } from './engine/engine'
+import {
+  GameEngine,
+  type GameOverStats,
+  type HudState,
+  type UnlockInfo,
+  type WeaponUi,
+} from './engine/engine'
 
 const props = withDefaults(
   defineProps<{
@@ -24,37 +30,50 @@ const props = withDefaults(
 // --- éléments DOM ---
 const wrap = ref<HTMLDivElement | null>(null)
 const canvas = ref<HTMLCanvasElement | null>(null)
-const joyBase = ref<HTMLDivElement | null>(null)
-const joyStick = ref<HTMLDivElement | null>(null)
+const moveJoyBase = ref<HTMLDivElement | null>(null)
+const moveJoyStick = ref<HTMLDivElement | null>(null)
+const aimJoyBase = ref<HTMLDivElement | null>(null)
+const aimJoyStick = ref<HTMLDivElement | null>(null)
 // refs HUD écrites en DOM direct (hors réactivité)
-const xpFill = ref<HTMLDivElement | null>(null)
+const paintFill = ref<HTMLDivElement | null>(null)
+const paintEl = ref<HTMLElement | null>(null)
+const nextWrap = ref<HTMLElement | null>(null)
+const nextEl = ref<HTMLElement | null>(null)
 const hpFill = ref<HTMLDivElement | null>(null)
 const hpText = ref<HTMLSpanElement | null>(null)
-const lvlEl = ref<HTMLElement | null>(null)
 const timeEl = ref<HTMLSpanElement | null>(null)
 const killEl = ref<HTMLElement | null>(null)
 
-// --- état réactif basse fréquence (écrans + cartes) ---
-type Screen = 'start' | 'playing' | 'levelup' | 'over'
+// --- état réactif basse fréquence ---
+type Screen = 'start' | 'playing' | 'over'
 const screen = ref<Screen>('start')
-const cards = shallowRef<UpgradeCard[]>([])
-const finalStats = shallowRef<GameOverStats>({ time: '00:00', kills: 0, level: 1 })
+const weaponsUi = shallowRef<WeaponUi[]>([])
+const finalStats = shallowRef<GameOverStats>({ time: '00:00', kills: 0, paint: 0 })
+const toast = shallowRef<UnlockInfo | null>(null)
 
 let engine: GameEngine | null = null
+let toastTimer = 0
 
-// Phaser → DOM : le moteur pousse des valeurs prêtes à afficher, on les écrit telles quelles.
+// Moteur → DOM : valeurs prêtes à afficher, écrites telles quelles chaque frame.
 function onHud(h: HudState): void {
   if (hpFill.value) hpFill.value.style.width = h.hpPct + '%'
   if (hpText.value) hpText.value.textContent = String(h.hp)
-  if (xpFill.value) xpFill.value.style.width = h.xpPct + '%'
-  if (lvlEl.value) lvlEl.value.textContent = String(h.level)
+  if (paintFill.value) paintFill.value.style.width = h.paintPct + '%'
+  if (paintEl.value) paintEl.value.textContent = String(h.paint)
   if (timeEl.value) timeEl.value.textContent = h.time
   if (killEl.value) killEl.value.textContent = String(h.kills)
+  if (nextWrap.value) nextWrap.value.style.visibility = h.nextCost === null ? 'hidden' : 'visible'
+  if (nextEl.value && h.nextCost !== null) nextEl.value.textContent = String(h.nextCost)
 }
 
-function onLevelUp(picks: UpgradeCard[]): void {
-  cards.value = picks
-  screen.value = 'levelup'
+function onWeapons(list: WeaponUi[]): void {
+  weaponsUi.value = list
+}
+
+function onUnlock(info: UnlockInfo): void {
+  toast.value = info
+  window.clearTimeout(toastTimer)
+  toastTimer = window.setTimeout(() => (toast.value = null), 2600)
 }
 
 function onGameOver(stats: GameOverStats): void {
@@ -67,32 +86,31 @@ function start(): void {
   screen.value = 'playing'
 }
 
-function pick(id: string): void {
-  if (!engine) return
-  const next = engine.pickUpgrade(id)
-  if (next) cards.value = next // plusieurs level-ups d'un coup : on enchaîne
-  else screen.value = 'playing'
+function selectWeapon(id: string): void {
+  engine?.selectWeapon(id)
 }
 
 onMounted(() => {
-  if (!wrap.value || !canvas.value || !joyBase.value || !joyStick.value) return
+  if (!wrap.value || !canvas.value || !moveJoyBase.value || !moveJoyStick.value || !aimJoyBase.value || !aimJoyStick.value) return
   wrap.value.style.setProperty('--neon', props.neon)
   engine = new GameEngine()
   engine.init({
     wrap: wrap.value,
     canvas: canvas.value,
-    joyBase: joyBase.value,
-    joyStick: joyStick.value,
+    moveJoyBase: moveJoyBase.value,
+    moveJoyStick: moveJoyStick.value,
+    aimJoyBase: aimJoyBase.value,
+    aimJoyStick: aimJoyStick.value,
     neon: props.neon,
     difficulty: props.difficulty,
-    hooks: { hud: onHud, levelUp: onLevelUp, gameOver: onGameOver },
+    hooks: { hud: onHud, weapons: onWeapons, unlock: onUnlock, gameOver: onGameOver },
   })
-  // Poignée de debug en dev uniquement (inspection console / tests)
   if (import.meta.env.DEV) (window as unknown as { __ngs?: GameEngine }).__ngs = engine
 })
 
 onBeforeUnmount(() => {
   // Destruction propre : rAF annulé + tous les listeners retirés (AbortController).
+  window.clearTimeout(toastTimer)
   engine?.destroy()
   engine = null
   if (import.meta.env.DEV) delete (window as unknown as { __ngs?: GameEngine }).__ngs
@@ -109,15 +127,36 @@ onBeforeUnmount(() => {
 
     <!-- HUD (persiste dans le DOM via v-show : les refs restent valides) -->
     <div v-show="screen === 'playing'" class="ngs-hud">
-      <div class="ngs-xpbar">
-        <div ref="xpFill" class="ngs-xpfill"></div>
+      <!-- Jauge de peinture : progression vers le prochain déblocage d'arme -->
+      <div class="ngs-paintbar">
+        <div ref="paintFill" class="ngs-paintfill"></div>
       </div>
       <div class="ngs-stats">
-        <span class="ngs-lv">LV <b ref="lvlEl">1</b></span>
+        <span class="ngs-paint"><b ref="paintEl">0</b> PAINT</span>
+        <span ref="nextWrap" class="ngs-next">NEXT TOOL <b ref="nextEl">35</b></span>
         <span ref="timeEl" class="ngs-time">00:00</span>
         <span class="ngs-kills"><b ref="killEl">0</b> TAGGED</span>
       </div>
       <div class="ngs-spacer"></div>
+
+      <!-- Barre d'armes : 1-4 au clavier, tapable au doigt.
+           @pointerdown.stop : un tap ici ne doit PAS invoquer le joystick de visée. -->
+      <div class="ngs-weapons" @pointerdown.stop>
+        <button
+          v-for="w in weaponsUi"
+          :key="w.id"
+          class="ngs-slot"
+          :class="{ locked: !w.unlocked, active: w.active }"
+          :style="w.active ? { borderColor: w.color, boxShadow: `0 0 14px ${w.color}` } : {}"
+          :disabled="!w.unlocked"
+          @click="selectWeapon(w.id)"
+        >
+          <span class="ngs-slotkey">{{ w.slot }}</span>
+          <span class="ngs-slottag" :style="{ color: w.unlocked ? w.color : '#4a4f56' }">{{ w.tag }}</span>
+          <span v-if="!w.unlocked" class="ngs-slotcost">{{ w.cost }}</span>
+        </button>
+      </div>
+
       <div class="ngs-hpwrap">
         <div class="ngs-hplabel">
           <span>HP</span><span ref="hpText">110</span>
@@ -128,9 +167,22 @@ onBeforeUnmount(() => {
       </div>
     </div>
 
-    <!-- Joystick virtuel (positionné par le moteur en DOM direct) -->
-    <div ref="joyBase" class="ngs-joybase">
-      <div ref="joyStick" class="ngs-joystick"></div>
+    <!-- Toast de déblocage d'arme -->
+    <div
+      v-if="toast"
+      class="ngs-toast"
+      :style="{ borderColor: toast.color, boxShadow: `0 0 22px ${toast.color}` }"
+    >
+      NEW TOOL: <b :style="{ color: toast.color }">{{ toast.name }}</b>
+      <span class="ngs-toastkey">[{{ toast.slot }}]</span>
+    </div>
+
+    <!-- Joysticks virtuels : gauche = déplacement, droite = visée/tir -->
+    <div ref="moveJoyBase" class="ngs-joybase">
+      <div ref="moveJoyStick" class="ngs-joystick move"></div>
+    </div>
+    <div ref="aimJoyBase" class="ngs-joybase">
+      <div ref="aimJoyStick" class="ngs-joystick aim"></div>
     </div>
 
     <!-- ÉCRAN TITRE -->
@@ -142,26 +194,14 @@ onBeforeUnmount(() => {
         <span class="t3">SURVIVOR</span>
       </h1>
       <p class="ngs-pitch">
-        Hold the block. Move to dodge — your can auto-sprays the nearest heat.
-        Level up, stack upgrades, don't get buffed.
+        Hold the block. Aim your can and spray the heat yourself —
+        grab spilled paint to unlock heavier tools.
       </p>
-      <div class="ngs-help">WASD / ARROWS · DRAG TO MOVE ON TOUCH</div>
-      <button class="ngs-cta" @click="start">START RUN ▸</button>
-    </div>
-
-    <!-- LEVEL UP -->
-    <div v-if="screen === 'levelup'" class="ngs-overlay ngs-levelup">
-      <div class="ngs-lvtitle">LEVEL UP</div>
-      <div class="ngs-lvsub">Pick a piece for your kit</div>
-      <div class="ngs-cards">
-        <button v-for="card in cards" :key="card.id" class="ngs-card" @click="pick(card.id)">
-          <div class="ngs-cardhead">
-            <span class="ngs-cardtag" :style="{ background: card.color, boxShadow: `0 0 14px ${card.color}` }">{{ card.tag }}</span>
-            <span class="ngs-cardtitle">{{ card.title }}</span>
-          </div>
-          <div class="ngs-carddesc">{{ card.desc }}</div>
-        </button>
+      <div class="ngs-help">
+        WASD MOVE · MOUSE AIM · HOLD CLICK TO SPRAY · 1-4 SWAP<br />
+        ON TOUCH: LEFT STICK MOVE · RIGHT STICK AIM &amp; FIRE
       </div>
+      <button class="ngs-cta" @click="start">START RUN ▸</button>
     </div>
 
     <!-- GAME OVER -->
@@ -170,7 +210,7 @@ onBeforeUnmount(() => {
       <div class="ngs-final">
         You held out for <b class="c2">{{ finalStats.time }}</b> ·
         <b class="c3">{{ finalStats.kills }}</b> tagged ·
-        reached <b class="cw">LV {{ finalStats.level }}</b>
+        <b class="cw">{{ finalStats.paint }}</b> paint
       </div>
       <button class="ngs-cta cta2" @click="start">RUN IT BACK ▸</button>
     </div>
@@ -237,14 +277,14 @@ onBeforeUnmount(() => {
   flex-direction: column;
   gap: 10px;
 }
-.ngs-xpbar {
+.ngs-paintbar {
   height: 12px;
   border: 2px solid #17181c;
   background: #141518;
   box-shadow: 0 0 0 2px #000;
   overflow: hidden;
 }
-.ngs-xpfill {
+.ngs-paintfill {
   height: 100%;
   width: 0%;
   background: var(--neon2);
@@ -258,8 +298,10 @@ onBeforeUnmount(() => {
   font-family: 'Silkscreen', monospace;
   font-size: 15px;
   letter-spacing: 1px;
+  flex-wrap: wrap;
 }
-.ngs-lv { color: var(--neon); text-shadow: 0 0 10px var(--neon); }
+.ngs-paint { color: var(--neon2); text-shadow: 0 0 10px var(--neon2); }
+.ngs-next { color: #8a9098; font-size: 11px; letter-spacing: 2px; }
 .ngs-time { color: #e9edf2; text-shadow: 0 0 8px rgba(233, 237, 242, 0.5); }
 .ngs-kills { color: var(--neon3); text-shadow: 0 0 10px var(--neon3); }
 .ngs-spacer { flex: 1; }
@@ -288,7 +330,70 @@ onBeforeUnmount(() => {
   transition: width 0.1s linear;
 }
 
-/* --- joystick virtuel --- */
+/* --- barre d'armes --- */
+.ngs-weapons {
+  pointer-events: auto;
+  align-self: center;
+  display: flex;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+.ngs-slot {
+  position: relative;
+  width: 46px;
+  height: 46px;
+  cursor: pointer;
+  background: rgba(19, 20, 24, 0.9);
+  border: 2px solid #2a2d33;
+  color: inherit;
+  font-family: 'Silkscreen', monospace;
+  display: grid;
+  place-items: center;
+  transition: transform 0.08s;
+}
+.ngs-slot:hover:not(:disabled) { transform: translateY(-3px); }
+.ngs-slot.locked { cursor: default; opacity: 0.65; }
+.ngs-slotkey {
+  position: absolute;
+  top: 1px;
+  left: 4px;
+  font-size: 8px;
+  color: #6b7076;
+}
+.ngs-slottag { font-size: 18px; text-shadow: 0 0 10px currentColor; }
+.ngs-slot.locked .ngs-slottag { text-shadow: none; }
+.ngs-slotcost {
+  position: absolute;
+  bottom: 1px;
+  right: 4px;
+  font-size: 8px;
+  color: #8a9098;
+}
+
+/* --- toast de déblocage --- */
+@keyframes ngs-toast-in {
+  from { opacity: 0; transform: translate(-50%, -10px); }
+  to { opacity: 1; transform: translate(-50%, 0); }
+}
+.ngs-toast {
+  position: absolute;
+  top: 84px;
+  left: 50%;
+  transform: translate(-50%, 0);
+  z-index: 9;
+  pointer-events: none;
+  font-family: 'Silkscreen', monospace;
+  font-size: 13px;
+  letter-spacing: 1px;
+  color: #e9edf2;
+  background: rgba(10, 10, 14, 0.92);
+  border: 2px solid;
+  padding: 10px 18px;
+  animation: ngs-toast-in 0.22s ease both;
+}
+.ngs-toastkey { color: #8a9098; margin-left: 8px; }
+
+/* --- joysticks virtuels --- */
 .ngs-joybase {
   position: absolute;
   z-index: 9;
@@ -308,16 +413,12 @@ onBeforeUnmount(() => {
   width: 52px;
   height: 52px;
   border-radius: 50%;
-  background: var(--neon);
-  box-shadow: 0 0 18px var(--neon);
   transform: translate(-50%, -50%);
 }
+.ngs-joystick.move { background: var(--neon); box-shadow: 0 0 18px var(--neon); }
+.ngs-joystick.aim { background: var(--neon2); box-shadow: 0 0 18px var(--neon2); }
 
 /* --- overlays --- */
-@keyframes ngs-in {
-  from { opacity: 0; transform: translateY(14px) scale(0.98); }
-  to { opacity: 1; transform: none; }
-}
 .ngs-overlay {
   position: absolute;
   inset: 0;
@@ -359,6 +460,7 @@ onBeforeUnmount(() => {
   font-family: 'Silkscreen', monospace;
   font-size: 11px;
   letter-spacing: 2px;
+  line-height: 1.9;
   color: #7d848c;
   margin: 14px 0 26px;
 }
@@ -384,58 +486,6 @@ onBeforeUnmount(() => {
   box-shadow: 6px 6px 0 #061214, 0 0 26px var(--neon2);
 }
 .ngs-cta.cta2:hover { box-shadow: 8px 8px 0 #061214, 0 0 32px var(--neon2); }
-
-/* level up */
-.ngs-levelup { background: rgba(5, 5, 7, 0.82); z-index: 22; }
-.ngs-lvtitle {
-  font-family: 'Silkscreen', monospace;
-  font-size: clamp(20px, 4vw, 34px);
-  letter-spacing: 2px;
-  color: var(--neon3);
-  text-shadow: 0 0 20px var(--neon3);
-  margin-bottom: 6px;
-}
-.ngs-lvsub { font-size: 22px; color: #aeb5bd; margin-bottom: 26px; }
-.ngs-cards {
-  display: flex;
-  gap: 18px;
-  flex-wrap: wrap;
-  justify-content: center;
-  max-width: 820px;
-}
-.ngs-card {
-  pointer-events: auto;
-  cursor: pointer;
-  width: 220px;
-  text-align: left;
-  background: #131418;
-  border: 2px solid #23252b;
-  border-top: 4px solid var(--neon);
-  padding: 20px;
-  box-shadow: 6px 6px 0 #000;
-  animation: ngs-in 0.28s ease both;
-  transition: transform 0.1s;
-  color: inherit;
-  font-family: inherit;
-}
-.ngs-card:hover { transform: translateY(-5px); border-color: var(--neon); }
-.ngs-cardhead { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
-.ngs-cardtag {
-  width: 34px;
-  height: 34px;
-  display: grid;
-  place-items: center;
-  font-family: 'Silkscreen', monospace;
-  font-size: 16px;
-  color: #0a0a0c;
-}
-.ngs-cardtitle {
-  font-family: 'Silkscreen', monospace;
-  font-size: 13px;
-  letter-spacing: 0.5px;
-  color: #eef2f6;
-}
-.ngs-carddesc { font-size: 19px; line-height: 1.3; color: #aab1b9; }
 
 /* game over */
 .ngs-gameover { background: radial-gradient(90% 80% at 50% 45%, rgba(40, 6, 20, 0.6), rgba(5, 5, 7, 0.92)); z-index: 22; }
