@@ -1,18 +1,32 @@
 // Moteur du jeu : boucle rAF, entrées, entités, combat, rendu Canvas 2D.
-// Porté du prototype "Neon Graffiti Survivor", puis retravaillé :
-//  - le tir automatique est REMPLACÉ par une visée manuelle (double joystick
-//    tactile sur mobile, souris + clic maintenu sur desktop) ;
-//  - les cartes d'amélioration aléatoires sont REMPLACÉES par des armes
-//    débloquées à des paliers de peinture ramassée (les anciennes orbes d'XP
-//    servent de monnaie de progression cumulative) ;
-//  - l'arène codée en dur est remplacée par le système de chunks de level.ts.
 //
-// IMPORTANT : tout l'état vit ici, dans des objets simples — jamais dans la
-// réactivité Vue. La communication avec le composant passe par des hooks
-// basse fréquence + un hook HUD par frame écrit en DOM direct côté composant.
+// Optimisation mobile — principes appliqués dans ce fichier :
+//  - Profil de qualité centralisé (quality.ts) : DPR plafonné, budget d'ennemis,
+//    politique de halos/ombres, budget de particules — détecté au runtime, avec un
+//    moniteur de FPS qui dégrade dynamiquement (perfLevel 0→2) si ça rame.
+//  - ZÉRO allocation dans le hot path : toutes les entités sont poolées
+//    (swap-remove, jamais de splice/push par frame), le tri en profondeur réutilise
+//    un tableau persistant (pas de closures), le HUD réutilise le même objet.
+//  - Culling viewport de TOUTES les entités (ennemis, orbes, splats, tirs, bombes,
+//    particules) avec la marge du profil.
+//  - Collisions tirs↔ennemis via un hash spatial (têtes de liste par cellule,
+//    Int32Array) reconstruit chaque frame ; pushOut passe par les buckets
+//    statiques du niveau.
+//  - Le décor statique est blitté depuis les tuiles pré-rendues de level.ts.
+//
+// IMPORTANT : tout l'état vit ici, jamais dans la réactivité Vue. La communication
+// avec le composant passe par des hooks basse fréquence + un hook HUD par frame.
 
 import { buildGlows, buildSprites, buildTile, drawSprite, NEONS, type BakedSprite } from './sprites'
-import { generateLevel, Level, type LogoKit } from './level'
+import { CELL, generateLevel, Level, type LogoKit } from './level'
+import {
+  detectProfile,
+  FRAME_BUDGET_MS,
+  MAX_PERF_LEVEL,
+  SLOW_GRACE_S,
+  type GlowMode,
+  type QualityProfile,
+} from './quality'
 import logoBlackUrl from '../src/logo-black.svg'
 
 // ---------------------------------------------------------------------------
@@ -69,6 +83,7 @@ export interface EngineOptions {
   hooks: EngineHooks
   neon?: string
   difficulty?: 'easy' | 'normal' | 'hard'
+  quality?: 'auto' | 'mobile' | 'desktop' // override du profil (défaut : détection)
 }
 
 // ---------------------------------------------------------------------------
@@ -110,8 +125,19 @@ const HIT_IFRAME = 0.45 // invulnérabilité globale après un coup (amortit les
 const REGEN_DELAY = 3.5 // secondes sans coup avant de récupérer des HP
 const REGEN_RATE = 7 // HP/s régénérés hors combat (récompense le repli)
 
+// Capacités des pools — pré-alloués une fois au boot ; les profils de qualité
+// bornent le nombre VIVANT, jamais la capacité (pas de realloc en cours de run).
+const POOL_ENEMIES = 240
+const POOL_SHOTS = 160
+const POOL_BOMBS = 24
+const POOL_ORBS = 240
+const POOL_PARTS = 320
+const POOL_TAGS = 16
+const POOL_SPLATS = 60
+const MAX_SPLAT_BLOBS = 9
+
 // ---------------------------------------------------------------------------
-// Entités
+// Entités (objets poolés : réutilisés, jamais recréés en cours de partie)
 // ---------------------------------------------------------------------------
 interface PlayerState {
   x: number; y: number
@@ -145,12 +171,19 @@ interface ShotEnt {
 interface BombEnt { x: number; y: number; sx: number; sy: number; tx: number; ty: number; prog: number; spd: number; col: string; rot: number }
 interface OrbEnt { x: number; y: number; xp: number; vx: number; vy: number; col: string }
 interface PartEnt { x: number; y: number; vx: number; vy: number; r: number; col: string; life: number; max: number }
-interface SplatDecal { x: number; y: number; col: string; blobs: { dx: number; dy: number; r: number }[] }
+interface SplatBlob { dx: number; dy: number; r: number }
+interface SplatDecal { x: number; y: number; col: string; blobs: SplatBlob[]; nb: number }
 interface FloatTag { x: number; y: number; txt: string; col: string; life: number }
 
 interface JoyState { id: number; ox: number; oy: number; x: number; y: number }
 
 type EngineState = 'idle' | 'playing' | 'over'
+
+// Tri en profondeur sans allocation : créneaux persistants triés par y.
+// kind : 0 = banc, 1 = pilier, 2 = ennemi, 3 = joueur. y = Infinity → inutilisé.
+interface SortSlot { y: number; kind: number; ref: unknown }
+const SORT_CAP = POOL_ENEMIES + 40
+const SORT_BY_Y = (a: SortSlot, b: SortSlot) => a.y - b.y
 
 const ENEMY_DEFS: Record<EnemyType, { spr: string; hp: number; spd: number; dmg: number; size: number; xp: number }> = {
   dog: { spr: 'dog', hp: 26, spd: 118, dmg: 7, size: 26, xp: 3 },
@@ -184,6 +217,13 @@ export class GameEngine {
   private dm = 1
   private logos: LogoKit = { white: null, black: null }
 
+  // Profil de qualité + dégradation dynamique
+  private profile: QualityProfile = detectProfile('desktop')
+  private perfLevel = 0 // 0 = plein profil, 1 = -halos/-particules, 2 = -ennemis/-ombres
+  private frameEma = 16 // EMA du temps de frame brut (ms)
+  private slowT = 0 // temps passé au-dessus du budget
+  private frameNo = 0
+
   private spr!: Record<string, BakedSprite>
   private glows!: Record<string, HTMLCanvasElement>
   private shadow!: HTMLCanvasElement
@@ -194,13 +234,41 @@ export class GameEngine {
   private cam = { x: 0, y: 0 }
   private weapons: WeaponDef[] = makeWeapons()
   private activeId: WeaponKind = 'spray'
+
+  // Pools d'entités : [0, count) = vivants, swap-remove à la mort.
   private enemies: EnemyEnt[] = []
+  private enemyCount = 0
   private shots: ShotEnt[] = []
+  private shotCount = 0
   private bombs: BombEnt[] = []
+  private bombCount = 0
   private orbs: OrbEnt[] = []
+  private orbCount = 0
   private parts: PartEnt[] = []
-  private splats: SplatDecal[] = []
+  private partCount = 0
   private tags: FloatTag[] = []
+  private tagCount = 0
+  // Splats : ring buffer (les plus vieux sont recouverts, comme l'ancien cap).
+  private splats: SplatDecal[] = []
+  private splatHead = 0
+
+  // Hash spatial des ennemis : têtes de liste par cellule + chaînage par index.
+  private hashHeads = new Int32Array(0)
+  private hashNext = new Int32Array(POOL_ENEMIES)
+
+  // Tri en profondeur persistant (aucune closure par frame).
+  private sortSlots: SortSlot[] = []
+
+  // Scratch réutilisés chaque frame (zéro alloc).
+  private mv = { x: 0, y: 0 }
+  private steerV = { x: 0, y: 0 }
+  private hudState: HudState = { hpPct: 100, hp: 0, paint: 0, paintPct: 0, nextCost: null, time: '00:00', kills: 0 }
+
+  // Politique d'effets calculée une fois par frame (lue par drawEnemy).
+  private frGlowMode: GlowMode = 'full'
+  private frNearD2 = 0
+  private frShadows = true
+  private frFx = true // halos des tirs/orbes (composite 'lighter')
 
   private time = 0
   private kills = 0
@@ -223,6 +291,11 @@ export class GameEngine {
   private ro: ResizeObserver | null = null
   private destroyed = false
 
+  // Le composant lit le profil (ex. pour l'overlay CRT).
+  get qualityProfile(): QualityProfile {
+    return this.profile
+  }
+
   // ---------- cycle de vie ----------
   init(opts: EngineOptions): void {
     this.wrap = opts.wrap
@@ -234,6 +307,7 @@ export class GameEngine {
     this.hooks = opts.hooks
     this.neon = opts.neon || '#ff00cc'
     this.dm = { easy: 0.8, normal: 1, hard: 1.35 }[opts.difficulty || 'normal']
+    this.profile = detectProfile(opts.quality)
 
     this.ctx = this.canvas.getContext('2d')!
     this.spr = buildSprites(this.neon)
@@ -242,7 +316,16 @@ export class GameEngine {
     this.shadow = gk.shadow
     this.tilePattern = this.ctx.createPattern(buildTile(), 'repeat')!
 
-    document.fonts?.load("12px 'Press Start 2P'").catch(() => {})
+    this.allocPools()
+
+    // Police pixel : les tuiles statiques contiennent du texte → on ré-invalide
+    // le cache quand elle arrive (sinon les graffitis bakent en police fallback).
+    document.fonts
+      ?.load("12px 'Press Start 2P'")
+      .then(() => {
+        if (!this.destroyed) this.level?.invalidateStatic()
+      })
+      .catch(() => {})
     this.loadLogos()
 
     const sig = this.ac.signal
@@ -254,6 +337,7 @@ export class GameEngine {
     this.wrap.addEventListener('pointercancel', (e) => this.onPointer('up', e), { signal: sig })
     this.wrap.addEventListener('wheel', (e) => this.onWheel(e), { signal: sig, passive: true })
 
+    // Couvre aussi les changements d'orientation mobile (le wrap change de taille).
     this.ro = new ResizeObserver(() => this.resize())
     this.ro.observe(this.wrap)
     this.resize()
@@ -270,6 +354,36 @@ export class GameEngine {
     this.ac.abort()
     this.ro?.disconnect()
     this.ro = null
+  }
+
+  // Pré-alloue tous les pools une seule fois (aucune création d'objet en partie).
+  private allocPools(): void {
+    for (let i = 0; i < POOL_ENEMIES; i++) {
+      this.enemies.push({ type: 'dog', spr: 'dog', x: 0, y: 0, hp: 0, maxHp: 0, spd: 0, dmg: 0, size: 0, xp: 0, face: 1, hitT: 0, flash: 0, elite: false, scale: 1 })
+    }
+    for (let i = 0; i < POOL_SHOTS; i++) {
+      this.shots.push({ x: 0, y: 0, vx: 0, vy: 0, ttl: 0, max: 1, dmg: 0, r: 0, col: '#fff', kind: 'shot' })
+    }
+    for (let i = 0; i < POOL_BOMBS; i++) {
+      this.bombs.push({ x: 0, y: 0, sx: 0, sy: 0, tx: 0, ty: 0, prog: 0, spd: 0, col: '#fff', rot: 0 })
+    }
+    for (let i = 0; i < POOL_ORBS; i++) {
+      this.orbs.push({ x: 0, y: 0, xp: 0, vx: 0, vy: 0, col: '#fff' })
+    }
+    for (let i = 0; i < POOL_PARTS; i++) {
+      this.parts.push({ x: 0, y: 0, vx: 0, vy: 0, r: 1, col: '#fff', life: 0, max: 1 })
+    }
+    for (let i = 0; i < POOL_TAGS; i++) {
+      this.tags.push({ x: 0, y: 0, txt: '', col: '#fff', life: 0 })
+    }
+    for (let i = 0; i < POOL_SPLATS; i++) {
+      const blobs: SplatBlob[] = []
+      for (let b = 0; b < MAX_SPLAT_BLOBS; b++) blobs.push({ dx: 0, dy: 0, r: 0 })
+      this.splats.push({ x: 0, y: 0, col: '#fff', blobs, nb: 0 })
+    }
+    for (let i = 0; i < SORT_CAP; i++) {
+      this.sortSlots.push({ y: Infinity, kind: 0, ref: null })
+    }
   }
 
   // Charge le logo du site et prépare deux teintes sur canvas offscreen.
@@ -293,13 +407,18 @@ export class GameEngine {
       }
       this.logos.white = tint('#ffffff')
       this.logos.black = tint('#050608')
+      // Les tuiles déjà bakées ne contiennent pas les logos → re-bake à la demande.
+      this.level?.invalidateStatic()
     }
     img.src = logoBlackUrl
   }
 
   // (Re)génère un monde + état frais. Nouveau layout de rues à chaque run.
   private initWorld(): void {
-    this.level = generateLevel()
+    this.level = generateLevel({ decalDensity: this.profile.decalDensity })
+    this.level.setStaticAssets(this.tilePattern, this.logos)
+    // Hash spatial dimensionné sur la grille du niveau (réalloué par run, pas par frame).
+    this.hashHeads = new Int32Array(this.level.cols * this.level.rows)
     this.p = {
       x: this.level.spawnX, y: this.level.spawnY,
       hp: 130, maxHp: 130, speed: 158, face: 1,
@@ -309,13 +428,14 @@ export class GameEngine {
     }
     this.weapons = makeWeapons()
     this.activeId = 'spray'
-    this.enemies = []
-    this.shots = []
-    this.bombs = []
-    this.orbs = []
-    this.parts = []
-    this.splats = []
-    this.tags = []
+    this.enemyCount = 0
+    this.shotCount = 0
+    this.bombCount = 0
+    this.orbCount = 0
+    this.partCount = 0
+    this.tagCount = 0
+    this.splatHead = 0
+    for (const s of this.splats) s.nb = 0
     this.time = 0
     this.kills = 0
     this.spawnT = 0
@@ -462,30 +582,31 @@ export class GameEngine {
     stick.style.top = 60 + dy + 'px'
   }
 
-  // Vecteur de déplacement : clavier + stick gauche.
+  // Vecteur de déplacement : clavier + stick gauche (écrit dans le scratch this.mv).
   private moveVec(): { x: number; y: number } {
-    let x = 0
-    let y = 0
+    const m = this.mv
+    m.x = 0
+    m.y = 0
     const k = this.keys
-    if (k.a || k.arrowleft) x -= 1
-    if (k.d || k.arrowright) x += 1
-    if (k.w || k.arrowup) y -= 1
-    if (k.s || k.arrowdown) y += 1
+    if (k.a || k.arrowleft) m.x -= 1
+    if (k.d || k.arrowright) m.x += 1
+    if (k.w || k.arrowup) m.y -= 1
+    if (k.s || k.arrowdown) m.y += 1
     if (this.moveJoy) {
       const dx = this.moveJoy.x - this.moveJoy.ox
       const dy = this.moveJoy.y - this.moveJoy.oy
       const d = Math.hypot(dx, dy)
       if (d > 8) {
-        x = dx / d
-        y = dy / d
+        m.x = dx / d
+        m.y = dy / d
       }
     }
-    const m = Math.hypot(x, y)
-    if (m > 1) {
-      x /= m
-      y /= m
+    const len = Math.hypot(m.x, m.y)
+    if (len > 1) {
+      m.x /= len
+      m.y /= len
     }
-    return { x, y }
+    return m
   }
 
   // Résout la visée : stick droit prioritaire (mobile), sinon souris (desktop).
@@ -520,20 +641,58 @@ export class GameEngine {
 
   private resize(): void {
     const r = this.wrap.getBoundingClientRect()
-    this.dpr = Math.min(2, window.devicePixelRatio || 1)
+    // Levier perf n°1 : DPR plafonné par le profil (1 sur mobile, pixel art oblige).
+    this.dpr = Math.min(this.profile.dprCap, window.devicePixelRatio || 1)
     this.vw = Math.max(320, r.width)
     this.vh = Math.max(320, r.height)
     this.canvas.width = Math.floor(this.vw * this.dpr)
     this.canvas.height = Math.floor(this.vh * this.dpr)
   }
 
+  // ---------- qualité effective (profil + dégradation dynamique) ----------
+  private enemyGlowMode(): GlowMode {
+    const base = this.profile.glow
+    if (this.perfLevel === 0) return base
+    if (this.perfLevel === 1) return base === 'full' ? 'near' : 'elite'
+    return base === 'full' ? 'elite' : 'off'
+  }
+
+  private effMaxEnemies(): number {
+    return this.perfLevel >= 2 ? Math.floor(this.profile.maxEnemies * 0.7) : this.profile.maxEnemies
+  }
+
+  private effMaxParticles(): number {
+    return Math.min(POOL_PARTS, this.perfLevel >= 1 ? this.profile.maxParticles >> 1 : this.profile.maxParticles)
+  }
+
+  private shadowsOn(): boolean {
+    return this.profile.shadows && this.perfLevel < 2
+  }
+
   // ---------- boucle ----------
   private loop(t: number): void {
     if (this.destroyed) return
+    const rawMs = Math.min(100, t - this.last)
     let dt = (t - this.last) / 1000
     this.last = t
     if (dt > 0.05) dt = 0.05
-    if (this.state === 'playing') this.update(dt)
+
+    // Moniteur de FPS : EMA du temps de frame → dégradation par paliers si le
+    // budget est dépassé de façon soutenue (rend le jeu jouable sur des
+    // téléphones plus faibles sans toucher au profil).
+    this.frameEma += (rawMs - this.frameEma) * 0.08
+    if (this.state === 'playing') {
+      if (this.frameEma > FRAME_BUDGET_MS) {
+        this.slowT += dt
+        if (this.slowT > SLOW_GRACE_S && this.perfLevel < MAX_PERF_LEVEL) {
+          this.perfLevel++
+          this.slowT = 0
+        }
+      } else if (this.slowT > 0) {
+        this.slowT = Math.max(0, this.slowT - dt * 0.5)
+      }
+      this.update(dt)
+    }
     this.render()
     this.raf = requestAnimationFrame((tt) => this.loop(tt))
   }
@@ -551,20 +710,19 @@ export class GameEngine {
     const L = this.level
     this.time += dt
 
-    // Déplacement : collision grille (glissement) + obstacles circulaires.
+    // Déplacement : collision grille (glissement) + obstacles (buckets spatiaux).
     const mv = this.moveVec()
     L.moveCircle(p, mv.x * p.speed * dt, mv.y * p.speed * dt, 12)
-    this.pushOut(p, 12)
+    L.pushOut(p, 12)
 
     this.updateCamera()
 
-    // Visée + tir manuel. Le perso regarde où il vise quand il tire,
-    // sinon dans sa direction de déplacement.
+    // Visée + tir manuel.
     p.firing = this.resolveAim()
     if (p.firing) p.face = p.aimX < 0 ? -1 : 1
     else if (mv.x) p.face = mv.x < 0 ? -1 : 1
 
-    // Cadence : décompte permanent, tir tant que maintenu (rattrape les frames longues).
+    // Cadence : décompte permanent, tir tant que maintenu.
     for (const w of this.weapons) {
       w.cd -= dt
       if (!p.firing || w.id !== this.activeId) {
@@ -579,7 +737,7 @@ export class GameEngine {
       }
     }
 
-    // Survie : i-frame global + régénération hors combat (récupère si on décroche).
+    // Survie : i-frame global + régénération hors combat.
     if (p.hurt > 0) p.hurt -= dt
     p.safe += dt
     if (p.safe > REGEN_DELAY && p.hp < p.maxHp) {
@@ -593,30 +751,34 @@ export class GameEngine {
       L.computeFlow(p.x, p.y)
     }
 
-    // Vagues : intervalle qui se resserre, batch qui grossit (courbe adoucie).
+    // Vagues : courbe scalée par le profil de qualité.
     this.spawnT -= dt
-    const interval = Math.max(0.45, 1.75 - this.time * 0.011) / this.dm
-    if (this.spawnT <= 0 && this.enemies.length < 220) {
+    const interval = (Math.max(0.45, 1.75 - this.time * 0.011) * this.profile.spawnIntervalScale) / this.dm
+    if (this.spawnT <= 0 && this.enemyCount < this.effMaxEnemies()) {
       this.spawnT = interval
-      const batch = 1 + Math.floor(this.time / 34)
+      const batch = 1 + Math.floor(this.time / this.profile.batchPeriod)
       for (let i = 0; i < batch; i++) this.spawnEnemy()
     }
 
-    // Ennemis
-    for (let i = this.enemies.length - 1; i >= 0; i--) {
+    // Ennemis : déplacement + contact + morts (les dégâts des tirs de CETTE frame
+    // seront appliqués après le hash → morts effectives à la frame suivante,
+    // ce qui garde le hash spatial valide toute la frame).
+    for (let i = this.enemyCount - 1; i >= 0; i--) {
       const e = this.enemies[i]
       const dx = p.x - e.x
       const dy = p.y - e.y
       const d = Math.hypot(dx, dy) || 1
       if (e.type === 'drone') {
+        // Les drones volent : ligne droite au-dessus des toits.
         e.x += (dx / d) * e.spd * dt
         e.y += (dy / d) * e.spd * dt
       } else {
-        const fs = L.steer(e.x, e.y)
-        const ux = fs ? fs.x : dx / d
-        const uy = fs ? fs.y : dy / d
+        // Au sol : flow field si dispo, sinon ligne droite (steerInto : zéro alloc).
+        const hasFlow = L.steerInto(e.x, e.y, this.steerV)
+        const ux = hasFlow ? this.steerV.x : dx / d
+        const uy = hasFlow ? this.steerV.y : dy / d
         L.moveCircle(e, ux * e.spd * dt, uy * e.spd * dt, e.size * 0.28)
-        this.pushOut(e, e.size * 0.28)
+        L.pushOut(e, e.size * 0.28)
       }
       e.face = dx < 0 ? -1 : 1
       e.hitT -= dt
@@ -624,54 +786,61 @@ export class GameEngine {
       if (d < e.size * 0.5 + 12 && e.hitT <= 0 && p.hurt <= 0) {
         e.hitT = 0.6
         p.hurt = HIT_IFRAME
-        p.safe = 0 // toute blessure remet à zéro le délai de régén
+        p.safe = 0
         p.hp -= e.dmg * this.dm
         this.shake = Math.min(9, this.shake + 4)
         if (p.hp <= 0) return this.gameOver()
       }
       e.flash = Math.max(0, e.flash - dt * 6)
-      if (e.hp <= 0) {
-        this.enemies.splice(i, 1)
-        this.kills++
-        this.orbs.push({
-          x: e.x, y: e.y, xp: e.xp,
-          vx: (Math.random() - 0.5) * 40, vy: (Math.random() - 0.5) * 40,
-          col: NEONS[(Math.random() * 4) | 0],
-        })
-        if (Math.random() < 0.14) this.spawnTag(e.x, e.y)
-      }
+      if (e.hp <= 0) this.killEnemyAt(i)
     }
 
-    // Projectiles directs (spray / éventail / aérosol)
-    for (let i = this.shots.length - 1; i >= 0; i--) {
+    // Hash spatial des ennemis (reconstruit chaque frame, zéro allocation).
+    this.buildEnemyHash()
+
+    // Projectiles directs : collisions via le hash (cellule ±1).
+    const cols = L.cols
+    const rows = L.rows
+    outer: for (let i = this.shotCount - 1; i >= 0; i--) {
       const s = this.shots[i]
       s.x += s.vx * dt
       s.y += s.vy * dt
       s.ttl -= dt
       if (s.ttl <= 0) {
-        this.shots.splice(i, 1)
+        this.killShotAt(i)
         continue
       }
       // La peinture s'écrase sur les murs.
       if (!L.walkableAt(s.x, s.y)) {
         this.puff(s.x, s.y, s.col, 2)
-        this.shots.splice(i, 1)
+        this.killShotAt(i)
         continue
       }
-      for (const e of this.enemies) {
-        const dd = Math.hypot(e.x - s.x, (e.y - 10) - s.y) // corps ≈ 10px au-dessus des pieds
-        if (dd < e.size * 0.4 + s.r) {
-          e.hp -= s.dmg
-          e.flash = 1
-          this.puff(s.x, s.y, s.col, s.kind === 'aero' ? 1 : 3)
-          this.shots.splice(i, 1)
-          break
+      const scx = (s.x / CELL) | 0
+      const scy = (s.y / CELL) | 0
+      for (let cy = scy - 1; cy <= scy + 1; cy++) {
+        if (cy < 0 || cy >= rows) continue
+        for (let cx = scx - 1; cx <= scx + 1; cx++) {
+          if (cx < 0 || cx >= cols) continue
+          for (let j = this.hashHeads[cy * cols + cx]; j !== -1; j = this.hashNext[j]) {
+            const e = this.enemies[j]
+            const rr = e.size * 0.4 + s.r
+            const ddx = e.x - s.x
+            const ddy = e.y - 10 - s.y // corps ≈ 10px au-dessus des pieds
+            if (ddx * ddx + ddy * ddy < rr * rr) {
+              e.hp -= s.dmg
+              e.flash = 1
+              this.puff(s.x, s.y, s.col, s.kind === 'aero' ? 1 : 3)
+              this.killShotAt(i)
+              continue outer
+            }
+          }
         }
       }
     }
 
     // Bombes lobées → explosion en zone à l'arrivée.
-    for (let i = this.bombs.length - 1; i >= 0; i--) {
+    for (let i = this.bombCount - 1; i >= 0; i--) {
       const b = this.bombs[i]
       const dx = b.tx - b.x
       const dy = b.ty - b.y
@@ -680,7 +849,9 @@ export class GameEngine {
       b.rot += dt * 14
       if (d <= step + 4) {
         this.explode(b.tx, b.ty, BOMB_RADIUS, BOMB_DMG, b.col)
-        this.bombs.splice(i, 1)
+        this.bombCount--
+        this.bombs[i] = this.bombs[this.bombCount]
+        this.bombs[this.bombCount] = b
       } else {
         b.x += (dx / d) * step
         b.y += (dy / d) * step
@@ -689,7 +860,7 @@ export class GameEngine {
     }
 
     // Orbes de peinture : dérive + aimant + ramassage → progression.
-    for (let i = this.orbs.length - 1; i >= 0; i--) {
+    for (let i = this.orbCount - 1; i >= 0; i--) {
       const o = this.orbs[i]
       o.x += o.vx * dt
       o.y += o.vy * dt
@@ -703,44 +874,103 @@ export class GameEngine {
         o.y += (dy / d) * 260 * dt
       }
       if (d < 16) {
-        this.orbs.splice(i, 1)
-        this.gainPaint(o.xp)
+        const gained = o.xp
+        this.orbCount--
+        this.orbs[i] = this.orbs[this.orbCount]
+        this.orbs[this.orbCount] = o
+        this.gainPaint(gained)
       }
     }
 
     // Particules
-    for (let i = this.parts.length - 1; i >= 0; i--) {
+    for (let i = this.partCount - 1; i >= 0; i--) {
       const q = this.parts[i]
       q.x += q.vx * dt
       q.y += q.vy * dt
       q.vx *= 0.92
       q.vy *= 0.92
       q.life -= dt
-      if (q.life <= 0) this.parts.splice(i, 1)
+      if (q.life <= 0) {
+        this.partCount--
+        this.parts[i] = this.parts[this.partCount]
+        this.parts[this.partCount] = q
+      }
     }
     // Mots flottants
-    for (let i = this.tags.length - 1; i >= 0; i--) {
+    for (let i = this.tagCount - 1; i >= 0; i--) {
       const tg = this.tags[i]
       tg.y -= 26 * dt
       tg.life -= dt
-      if (tg.life <= 0) this.tags.splice(i, 1)
+      if (tg.life <= 0) {
+        this.tagCount--
+        this.tags[i] = this.tags[this.tagCount]
+        this.tags[this.tagCount] = tg
+      }
     }
 
-    if (this.splats.length > 60) this.splats.splice(0, this.splats.length - 60)
     if (this.shake > 0) this.shake = Math.max(0, this.shake - dt * 22)
 
-    // HUD (écrit en DOM direct côté composant)
-    const next = this.weapons.find((w) => !w.unlocked) || null
-    const prev = next ? Math.max(0, ...this.weapons.filter((w) => w.unlocked).map((w) => w.cost)) : 0
-    this.hooks.hud({
-      hpPct: Math.max(0, (p.hp / p.maxHp) * 100),
-      hp: Math.max(0, Math.ceil(p.hp)),
-      paint: p.paint,
-      paintPct: next ? Math.min(100, ((p.paint - prev) / (next.cost - prev)) * 100) : 100,
-      nextCost: next ? next.cost : null,
-      time: this.fmt(this.time),
-      kills: this.kills,
-    })
+    // HUD : objet réutilisé (pas d'allocation), écrit en DOM direct côté composant.
+    let next: WeaponDef | null = null
+    let prev = 0
+    for (const w of this.weapons) {
+      if (!w.unlocked && !next) next = w
+      if (w.unlocked && w.cost > prev) prev = w.cost
+    }
+    const h = this.hudState
+    h.hpPct = Math.max(0, (p.hp / p.maxHp) * 100)
+    h.hp = Math.max(0, Math.ceil(p.hp))
+    h.paint = p.paint
+    h.paintPct = next ? Math.min(100, ((p.paint - prev) / (next.cost - prev)) * 100) : 100
+    h.nextCost = next ? next.cost : null
+    h.time = this.fmt(this.time)
+    h.kills = this.kills
+    this.hooks.hud(h)
+  }
+
+  // Mort d'un ennemi : compteur, orbe de peinture, mot flottant, swap-remove.
+  private killEnemyAt(i: number): void {
+    const e = this.enemies[i]
+    this.kills++
+    if (this.orbCount < POOL_ORBS) {
+      const o = this.orbs[this.orbCount++]
+      o.x = e.x
+      o.y = e.y
+      o.xp = e.xp
+      o.vx = (Math.random() - 0.5) * 40
+      o.vy = (Math.random() - 0.5) * 40
+      o.col = NEONS[(Math.random() * 4) | 0]
+    }
+    if (Math.random() < 0.14) this.spawnTag(e.x, e.y)
+    this.enemyCount--
+    this.enemies[i] = this.enemies[this.enemyCount]
+    this.enemies[this.enemyCount] = e
+  }
+
+  private killShotAt(i: number): void {
+    const s = this.shots[i]
+    this.shotCount--
+    this.shots[i] = this.shots[this.shotCount]
+    this.shots[this.shotCount] = s
+  }
+
+  // Reconstruit le hash spatial : tête de liste par cellule + chaînage par index.
+  private buildEnemyHash(): void {
+    this.hashHeads.fill(-1)
+    const cols = this.level.cols
+    const rows = this.level.rows
+    for (let i = 0; i < this.enemyCount; i++) {
+      const e = this.enemies[i]
+      let cx = (e.x / CELL) | 0
+      let cy = (e.y / CELL) | 0
+      if (cx < 0) cx = 0
+      else if (cx >= cols) cx = cols - 1
+      if (cy < 0) cy = 0
+      else if (cy >= rows) cy = rows - 1
+      const cell = cy * cols + cx
+      this.hashNext[i] = this.hashHeads[cell]
+      this.hashHeads[cell] = i
+    }
   }
 
   // ---------- tir ----------
@@ -760,9 +990,19 @@ export class GameEngine {
         for (let i = 0; i < 5; i++) this.spawnShot(mx, my, base + (i - 2) * 0.12, 470, 7, 4, 0.75, '#ffaa00', 'shot')
         break
       case 'bomb': {
-        const tx = p.x + p.aimX * BOMB_THROW
-        const ty = p.y + p.aimY * BOMB_THROW
-        this.bombs.push({ x: mx, y: my, sx: mx, sy: my, tx, ty, prog: 0, spd: 430, col: NEONS[(Math.random() * 4) | 0], rot: 0 })
+        if (this.bombCount < POOL_BOMBS) {
+          const b = this.bombs[this.bombCount++]
+          b.x = mx
+          b.y = my
+          b.sx = mx
+          b.sy = my
+          b.tx = p.x + p.aimX * BOMB_THROW
+          b.ty = p.y + p.aimY * BOMB_THROW
+          b.prog = 0
+          b.spd = 430
+          b.col = NEONS[(Math.random() * 4) | 0]
+          b.rot = 0
+        }
         break
       }
       case 'aero':
@@ -777,20 +1017,43 @@ export class GameEngine {
   }
 
   private spawnShot(x: number, y: number, angle: number, speed: number, dmg: number, r: number, ttl: number, col: string, kind: 'shot' | 'aero'): void {
-    this.shots.push({ x, y, vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed, ttl, max: ttl, dmg, r, col, kind })
+    if (this.shotCount >= POOL_SHOTS) return
+    const s = this.shots[this.shotCount++]
+    s.x = x
+    s.y = y
+    s.vx = Math.cos(angle) * speed
+    s.vy = Math.sin(angle) * speed
+    s.ttl = ttl
+    s.max = ttl
+    s.dmg = dmg
+    s.r = r
+    s.col = col
+    s.kind = kind
   }
 
-  // Petit nuage de gouttelettes à l'impact.
+  // Petit nuage de gouttelettes à l'impact (borné par le budget du profil).
   private puff(x: number, y: number, col: string, n: number): void {
+    const budget = this.effMaxParticles()
     for (let i = 0; i < n; i++) {
+      if (this.partCount >= budget) return
+      const q = this.parts[this.partCount++]
       const a = Math.random() * 7
       const s = 30 + Math.random() * 90
-      this.parts.push({ x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s, r: 1.5 + Math.random() * 2.5, col, life: 0.18 + Math.random() * 0.2, max: 0.35 })
+      q.x = x
+      q.y = y
+      q.vx = Math.cos(a) * s
+      q.vy = Math.sin(a) * s
+      q.r = 1.5 + Math.random() * 2.5
+      q.col = col
+      q.life = 0.18 + Math.random() * 0.2
+      q.max = 0.35
     }
   }
 
   private spawnEnemy(): void {
+    if (this.enemyCount >= Math.min(POOL_ENEMIES, this.effMaxEnemies())) return
     const t = this.time
+    // Pondération évolutive : les types durs arrivent avec le temps.
     const weights: Record<EnemyType, number> = {
       dog: 3 + Math.max(0, t * 0.02),
       tagger: 1.5 + t * 0.03,
@@ -813,11 +1076,13 @@ export class GameEngine {
     let ex: number
     let ey: number
     if (key === 'drone') {
+      // Les drones arrivent par les airs : anneau autour du joueur, murs ignorés.
       const ang = Math.random() * Math.PI * 2
       const rad = Math.max(this.vw, this.vh) * 0.62 + 60
       ex = Math.max(30, Math.min(this.level.W - 30, this.p.x + Math.cos(ang) * rad))
       ey = Math.max(30, Math.min(this.level.H - 30, this.p.y + Math.sin(ang) * rad))
     } else {
+      // Au sol : cellule jouable hors écran dans un anneau de distance.
       const rmin = Math.max(this.vw, this.vh) * 0.5 + 80
       const pt = this.level.randomSpawnPoint(this.p.x, this.p.y, rmin, rmin + 560, this.cam.x, this.cam.y, this.vw, this.vh)
       if (!pt) return
@@ -826,70 +1091,95 @@ export class GameEngine {
     }
     const elite = t > 78 && Math.random() < 0.07
     const hpScale = 1 + t * 0.010
-    this.enemies.push({
-      type: key,
-      spr: d.spr,
-      x: ex,
-      y: ey,
-      hp: d.hp * hpScale * (elite ? 2.4 : 1),
-      maxHp: d.hp * hpScale * (elite ? 2.4 : 1),
-      spd: d.spd * (elite ? 0.85 : 1),
-      dmg: d.dmg * (elite ? 1.6 : 1),
-      size: d.size * (elite ? 1.4 : 1),
-      xp: d.xp * (elite ? 4 : 1),
-      face: 1,
-      hitT: 0,
-      flash: 0,
-      elite,
-      scale: elite ? 1.4 : 1,
-    })
+    const e = this.enemies[this.enemyCount++]
+    e.type = key
+    e.spr = d.spr
+    e.x = ex
+    e.y = ey
+    e.hp = d.hp * hpScale * (elite ? 2.4 : 1)
+    e.maxHp = e.hp
+    e.spd = d.spd * (elite ? 0.85 : 1)
+    e.dmg = d.dmg * (elite ? 1.6 : 1)
+    e.size = d.size * (elite ? 1.4 : 1)
+    e.xp = d.xp * (elite ? 4 : 1)
+    e.face = 1
+    e.hitT = 0
+    e.flash = 0
+    e.elite = elite
+    e.scale = elite ? 1.4 : 1
   }
 
   private explode(x: number, y: number, radius: number, dmg: number, col: string): void {
-    for (const e of this.enemies) {
-      const d = Math.hypot(e.x - x, e.y - y)
-      if (d < radius + e.size * 0.4) {
-        e.hp -= dmg
-        e.flash = 1
-        const k = Math.max(0, 1 - d / radius) * 40
-        const a = Math.atan2(e.y - y, e.x - x)
-        if (e.type === 'drone') {
-          e.x += Math.cos(a) * k
-          e.y += Math.sin(a) * k
-        } else {
-          this.level.moveCircle(e, Math.cos(a) * k, Math.sin(a) * k, e.size * 0.28)
+    // Dégâts + recul via le hash spatial (portée bombe < 2 cellules).
+    const L = this.level
+    const cols = L.cols
+    const rows = L.rows
+    const reach = radius + 45
+    const c0x = Math.max(0, ((x - reach) / CELL) | 0)
+    const c1x = Math.min(cols - 1, ((x + reach) / CELL) | 0)
+    const c0y = Math.max(0, ((y - reach) / CELL) | 0)
+    const c1y = Math.min(rows - 1, ((y + reach) / CELL) | 0)
+    for (let cy = c0y; cy <= c1y; cy++) {
+      for (let cx = c0x; cx <= c1x; cx++) {
+        for (let j = this.hashHeads[cy * cols + cx]; j !== -1; j = this.hashNext[j]) {
+          const e = this.enemies[j]
+          const d = Math.hypot(e.x - x, e.y - y)
+          if (d < radius + e.size * 0.4) {
+            e.hp -= dmg
+            e.flash = 1
+            // Recul, borné par les murs pour ne pas éjecter un ennemi dans un bâtiment.
+            const k = Math.max(0, 1 - d / radius) * 40
+            const a = Math.atan2(e.y - y, e.x - x)
+            if (e.type === 'drone') {
+              e.x += Math.cos(a) * k
+              e.y += Math.sin(a) * k
+            } else {
+              L.moveCircle(e, Math.cos(a) * k, Math.sin(a) * k, e.size * 0.28)
+            }
+          }
         }
       }
     }
-    const blobs: SplatDecal['blobs'] = []
-    const nb = 5 + ((Math.random() * 4) | 0)
-    for (let i = 0; i < nb; i++) {
-      blobs.push({ dx: (Math.random() - 0.5) * radius * 1.1, dy: (Math.random() - 0.5) * radius * 1.1, r: radius * (0.18 + Math.random() * 0.34) })
+    // Splat de peinture permanent (ring buffer : recouvre le plus ancien).
+    const sp = this.splats[this.splatHead]
+    this.splatHead = (this.splatHead + 1) % POOL_SPLATS
+    sp.x = x
+    sp.y = y
+    sp.col = col
+    sp.nb = 5 + ((Math.random() * 4) | 0)
+    for (let i = 0; i < sp.nb; i++) {
+      const b = sp.blobs[i]
+      b.dx = (Math.random() - 0.5) * radius * 1.1
+      b.dy = (Math.random() - 0.5) * radius * 1.1
+      b.r = radius * (0.18 + Math.random() * 0.34)
     }
-    this.splats.push({ x, y, col, blobs })
+    // Particules (bornées par le budget du profil)
+    const budget = this.effMaxParticles()
     for (let i = 0; i < 16; i++) {
+      if (this.partCount >= budget) break
+      const q = this.parts[this.partCount++]
       const a = Math.random() * 7
       const s = 60 + Math.random() * 220
-      this.parts.push({ x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s, r: 2 + Math.random() * 4, col, life: 0.4 + Math.random() * 0.4, max: 0.8 })
+      q.x = x
+      q.y = y
+      q.vx = Math.cos(a) * s
+      q.vy = Math.sin(a) * s
+      q.r = 2 + Math.random() * 4
+      q.col = col
+      q.life = 0.4 + Math.random() * 0.4
+      q.max = 0.8
     }
     this.shake = Math.min(12, this.shake + radius * 0.06)
   }
 
   private spawnTag(x: number, y: number): void {
-    this.tags.push({ x, y, txt: KILL_WORDS[(Math.random() * KILL_WORDS.length) | 0], col: NEONS[(Math.random() * 4) | 0], life: 0.9 })
-  }
-
-  private pushOut(ent: { x: number; y: number }, er: number): void {
-    for (const o of this.level.obstacles) {
-      const dx = ent.x - o.x
-      const dy = ent.y - o.y
-      const d = Math.hypot(dx, dy)
-      const min = o.r + er
-      if (d > 0.01 && d < min) {
-        ent.x = o.x + (dx / d) * min
-        ent.y = o.y + (dy / d) * min
-      }
-    }
+    if (this.tagCount >= POOL_TAGS) return
+    const tg = this.tags[this.tagCount++]
+    tg.x = x
+    tg.y = y
+    tg.txt = KILL_WORDS[(Math.random() * KILL_WORDS.length) | 0]
+    tg.col = NEONS[(Math.random() * 4) | 0]
+    tg.life = 0.9
   }
 
   // ---------- progression : peinture cumulée → déblocages ----------
@@ -929,6 +1219,7 @@ export class GameEngine {
   private render(): void {
     const ctx = this.ctx
     if (!ctx) return
+    this.frameNo++
     const dpr = this.dpr
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
     ctx.imageSmoothingEnabled = false
@@ -943,89 +1234,120 @@ export class GameEngine {
     ctx.save()
     ctx.translate(-this.cam.x + sx, -this.cam.y + sy)
 
-    this.level.draw(ctx, this.cam.x, this.cam.y, this.vw, this.vh, this.tilePattern, this.logos)
+    // Décor statique : blit des tuiles pré-rendues (sol, murs, graffitis, logos…).
+    this.level.drawStatic(ctx, this.cam.x, this.cam.y, this.vw, this.vh, this.frameNo)
 
-    // Graffitis d'ambiance
-    for (const d of this.level.decals) {
-      if (d.x < this.cam.x - 120 || d.x > this.cam.x + this.vw + 120 || d.y < this.cam.y - 120 || d.y > this.cam.y + this.vh + 120) continue
-      ctx.save()
-      ctx.translate(d.x, d.y)
-      ctx.rotate(d.rot)
-      ctx.globalAlpha = d.a
-      ctx.font = `${d.sz}px 'Press Start 2P', monospace`
-      ctx.fillStyle = d.col
-      ctx.fillText(d.txt, 0, 0)
-      ctx.restore()
-    }
+    // Cadre de culling de la frame (marge du profil).
+    const m = this.profile.cullMargin
+    const x0 = this.cam.x - m
+    const x1 = this.cam.x + this.vw + m
+    const y0 = this.cam.y - m
+    const y1 = this.cam.y + this.vh + m
 
-    // Splats de peinture
-    for (const s of this.splats) {
-      ctx.save()
+    // Politique d'effets de la frame (lue par drawEnemy).
+    this.frGlowMode = this.enemyGlowMode()
+    this.frNearD2 = this.profile.glowNearDist * this.profile.glowNearDist
+    this.frShadows = this.shadowsOn()
+    this.frFx = this.profile.shotGlow && this.perfLevel === 0
+
+    const p = this.p
+
+    // Splats de peinture (ring ; les blobs débordent → marge élargie)
+    for (let i = 0; i < POOL_SPLATS; i++) {
+      const s = this.splats[i]
+      if (s.nb === 0) continue
+      if (s.x < x0 - 140 || s.x > x1 + 140 || s.y < y0 - 140 || s.y > y1 + 140) continue
       ctx.globalAlpha = 0.82
       ctx.fillStyle = s.col
-      for (const b of s.blobs) {
+      for (let b = 0; b < s.nb; b++) {
+        const bl = s.blobs[b]
         ctx.beginPath()
-        ctx.arc(s.x + b.dx, s.y + b.dy, b.r, 0, 7)
+        ctx.arc(s.x + bl.dx, s.y + bl.dy, bl.r, 0, 7)
         ctx.fill()
       }
-      ctx.restore()
+      ctx.globalAlpha = 1
     }
 
-    // Orbes de peinture (colorées : ce sont des gouttes de bombe)
-    for (const o of this.orbs) {
-      this.glow(o.col, o.x, o.y, 20, 0.7)
-      ctx.fillStyle = '#f4feff'
-      ctx.beginPath()
-      ctx.arc(o.x, o.y, 3.4, 0, 7)
-      ctx.fill()
+    // Orbes de peinture (halo composite seulement si le profil le permet)
+    for (let i = 0; i < this.orbCount; i++) {
+      const o = this.orbs[i]
+      if (o.x < x0 || o.x > x1 || o.y < y0 || o.y > y1) continue
+      if (this.frFx) {
+        this.glow(o.col, o.x, o.y, 20, 0.7)
+        ctx.fillStyle = '#f4feff'
+        ctx.beginPath()
+        ctx.arc(o.x, o.y, 3.4, 0, 7)
+        ctx.fill()
+      } else {
+        // Version mobile : deux disques pleins, pas de composite 'lighter'.
+        ctx.globalAlpha = 0.8
+        ctx.fillStyle = o.col
+        ctx.beginPath()
+        ctx.arc(o.x, o.y, 5, 0, 7)
+        ctx.fill()
+        ctx.globalAlpha = 1
+        ctx.fillStyle = '#f4feff'
+        ctx.beginPath()
+        ctx.arc(o.x, o.y, 2.4, 0, 7)
+        ctx.fill()
+      }
     }
 
-    // Objets du monde triés en profondeur : bancs, piliers, ennemis, joueur.
-    const S = 3.5
-    const p = this.p
-    const list: { y: number; f: () => void }[] = []
-    for (const b of this.level.benches) list.push({ y: b.y + 12, f: () => this.drawBench(b.x, b.y) })
-    for (const pl of this.level.pillars) list.push({ y: pl.y + 24, f: () => this.drawPillar(pl.x, pl.y) })
-    for (const e of this.enemies) {
-      list.push({
-        y: e.y,
-        f: () => {
-          const sp = this.spr[e.spr]
-          const sc = S * e.scale
-          ctx.globalAlpha = 0.5
-          ctx.drawImage(this.shadow, e.x - 14, e.y + 2, 28, 12)
-          ctx.globalAlpha = 1
-          if (e.type === 'drone') this.glow(sp.glow, e.x, e.y, 34 * e.scale, 0.5)
-          else this.glow(sp.glow, e.x, e.y - 4, 30 * e.scale, 0.38)
-          drawSprite(ctx, sp, e.x, e.y, sc, e.face)
-          if (e.flash > 0) {
-            ctx.save()
-            ctx.globalCompositeOperation = 'lighter'
-            ctx.globalAlpha = e.flash * 0.8
-            ctx.fillStyle = '#fff'
-            ctx.fillRect(e.x - (sp.w * sc) / 2, e.y - sp.h * sc, sp.w * sc, sp.h * sc)
-            ctx.restore()
-          }
-        },
-      })
+    // Tri en profondeur : créneaux persistants, entités cullées à l'insertion.
+    const slots = this.sortSlots
+    let n = 0
+    for (const b of this.level.benches) {
+      if (b.x < x0 || b.x > x1 || b.y < y0 || b.y > y1) continue
+      const sl = slots[n++]
+      sl.y = b.y + 12
+      sl.kind = 0
+      sl.ref = b
     }
-    list.push({
-      y: p.y,
-      f: () => {
-        ctx.globalAlpha = 0.5
-        ctx.drawImage(this.shadow, p.x - 16, p.y + 2, 32, 13)
-        ctx.globalAlpha = 1
-        // Halo vert discret quand on régénère (hors combat), sinon halo néon.
-        const regen = p.safe > REGEN_DELAY && p.hp < p.maxHp
-        this.glow(regen ? '#39ff14' : this.neon, p.x, p.y - 6, 34, regen ? 0.5 : 0.45)
-        // Clignotement pendant l'i-frame pour signaler l'invulnérabilité.
-        ctx.globalAlpha = p.hurt > 0 ? 0.45 + 0.3 * Math.sin(this.time * 40) : 1
-        drawSprite(ctx, this.spr.player, p.x, p.y, S, p.face)
-        ctx.globalAlpha = 1
-      },
-    })
-    list.sort((a, b) => a.y - b.y)
-    for (const it of list) it.f()
+    for (const pl of this.level.pillars) {
+      if (pl.x < x0 || pl.x > x1 || pl.y < y0 || pl.y > y1) continue
+      const sl = slots[n++]
+      sl.y = pl.y + 24
+      sl.kind = 1
+      sl.ref = pl
+    }
+    for (let i = 0; i < this.enemyCount; i++) {
+      const e = this.enemies[i]
+      if (e.x < x0 || e.x > x1 || e.y < y0 || e.y > y1) continue
+      const sl = slots[n++]
+      sl.y = e.y
+      sl.kind = 2
+      sl.ref = e
+    }
+    {
+      const sl = slots[n++]
+      sl.y = p.y
+      sl.kind = 3
+      sl.ref = null
+    }
+    for (let i = n; i < slots.length; i++) slots[i].y = Infinity
+    slots.sort(SORT_BY_Y)
+    for (let i = 0; i < slots.length; i++) {
+      const sl = slots[i]
+      if (sl.y === Infinity) break
+      switch (sl.kind) {
+        case 0: {
+          const b = sl.ref as { x: number; y: number }
+          this.drawBench(b.x, b.y)
+          break
+        }
+        case 1: {
+          const pl = sl.ref as { x: number; y: number }
+          this.drawPillar(pl.x, pl.y)
+          break
+        }
+        case 2:
+          this.drawEnemy(sl.ref as EnemyEnt)
+          break
+        case 3:
+          this.drawPlayer()
+          break
+      }
+    }
 
     // Indicateur de visée : pointillés dans la direction du tir.
     if (this.state === 'playing') {
@@ -1043,9 +1365,11 @@ export class GameEngine {
     }
 
     // Projectiles directs
-    for (const s of this.shots) {
+    for (let i = 0; i < this.shotCount; i++) {
+      const s = this.shots[i]
+      if (s.x < x0 || s.x > x1 || s.y < y0 || s.y > y1) continue
       const a = s.kind === 'aero' ? Math.max(0, s.ttl / s.max) : 1
-      if (s.kind === 'shot') this.glow(s.col, s.x, s.y, 16, 0.5)
+      if (s.kind === 'shot' && this.frFx) this.glow(s.col, s.x, s.y, 16, 0.5)
       ctx.globalAlpha = a
       ctx.fillStyle = s.col
       ctx.beginPath()
@@ -1054,8 +1378,10 @@ export class GameEngine {
     }
     ctx.globalAlpha = 1
 
-    // Bombes en vol (hop parabolique)
-    for (const b of this.bombs) {
+    // Bombes en vol (hop parabolique — rares, on garde leur halo)
+    for (let i = 0; i < this.bombCount; i++) {
+      const b = this.bombs[i]
+      if (b.x < x0 || b.x > x1 || b.y < y0 || b.y > y1) continue
       const hop = Math.sin(b.prog * Math.PI) * 18
       ctx.globalAlpha = 0.4
       ctx.drawImage(this.shadow, b.x - 8, b.y, 16, 7)
@@ -1073,7 +1399,9 @@ export class GameEngine {
     }
 
     // Particules
-    for (const q of this.parts) {
+    for (let i = 0; i < this.partCount; i++) {
+      const q = this.parts[i]
+      if (q.x < x0 || q.x > x1 || q.y < y0 || q.y > y1) continue
       ctx.globalAlpha = Math.max(0, q.life / q.max)
       ctx.fillStyle = q.col
       ctx.beginPath()
@@ -1082,29 +1410,84 @@ export class GameEngine {
     }
     ctx.globalAlpha = 1
 
-    // Mots flottants
-    for (const tg of this.tags) {
-      ctx.save()
-      ctx.globalAlpha = Math.min(1, tg.life * 1.6)
+    // Mots flottants (police définie UNE fois pour le lot)
+    if (this.tagCount > 0) {
       ctx.font = "12px 'Press Start 2P', monospace"
       ctx.textAlign = 'center'
-      ctx.fillStyle = '#0a0a0c'
-      ctx.fillText(tg.txt, tg.x + 2, tg.y + 2)
-      ctx.fillStyle = tg.col
-      ctx.fillText(tg.txt, tg.x, tg.y)
-      ctx.restore()
+      for (let i = 0; i < this.tagCount; i++) {
+        const tg = this.tags[i]
+        if (tg.x < x0 || tg.x > x1 || tg.y < y0 || tg.y > y1) continue
+        ctx.globalAlpha = Math.min(1, tg.life * 1.6)
+        ctx.fillStyle = '#0a0a0c'
+        ctx.fillText(tg.txt, tg.x + 2, tg.y + 2)
+        ctx.fillStyle = tg.col
+        ctx.fillText(tg.txt, tg.x, tg.y)
+      }
+      ctx.globalAlpha = 1
+      ctx.textAlign = 'left'
     }
-    ctx.textAlign = 'left'
 
     ctx.restore()
+  }
+
+  // Dessin d'un ennemi selon la politique d'effets de la frame.
+  private drawEnemy(e: EnemyEnt): void {
+    const ctx = this.ctx
+    const sp = this.spr[e.spr]
+    const sc = 3.5 * e.scale
+    if (this.frShadows) {
+      ctx.globalAlpha = 0.5
+      ctx.drawImage(this.shadow, e.x - 14, e.y + 2, 28, 12)
+      ctx.globalAlpha = 1
+    }
+    // Halo : full → toujours ; near → elites + proches du joueur ; elite → elites.
+    let glowOn = false
+    if (this.frGlowMode === 'full') glowOn = true
+    else if (this.frGlowMode === 'near') {
+      const dx = e.x - this.p.x
+      const dy = e.y - this.p.y
+      glowOn = e.elite || dx * dx + dy * dy < this.frNearD2
+    } else if (this.frGlowMode === 'elite') glowOn = e.elite
+    if (glowOn) {
+      if (e.type === 'drone') this.glow(sp.glow, e.x, e.y, 34 * e.scale, 0.5)
+      else this.glow(sp.glow, e.x, e.y - 4, 30 * e.scale, 0.38)
+    }
+    drawSprite(ctx, sp, e.x, e.y, sc, e.face)
+    if (e.flash > 0) {
+      ctx.save()
+      ctx.globalCompositeOperation = 'lighter'
+      ctx.globalAlpha = e.flash * 0.8
+      ctx.fillStyle = '#fff'
+      ctx.fillRect(e.x - (sp.w * sc) / 2, e.y - sp.h * sc, sp.w * sc, sp.h * sc)
+      ctx.restore()
+    }
+  }
+
+  private drawPlayer(): void {
+    const ctx = this.ctx
+    const p = this.p
+    if (this.frShadows) {
+      ctx.globalAlpha = 0.5
+      ctx.drawImage(this.shadow, p.x - 16, p.y + 2, 32, 13)
+      ctx.globalAlpha = 1
+    }
+    // Halo vert discret quand on régénère (hors combat), sinon halo néon.
+    const regen = p.safe > REGEN_DELAY && p.hp < p.maxHp
+    this.glow(regen ? '#39ff14' : this.neon, p.x, p.y - 6, 34, regen ? 0.5 : 0.45)
+    // Clignotement pendant l'i-frame pour signaler l'invulnérabilité.
+    ctx.globalAlpha = p.hurt > 0 ? 0.45 + 0.3 * Math.sin(this.time * 40) : 1
+    drawSprite(ctx, this.spr.player, p.x, p.y, 3.5, p.face)
+    ctx.globalAlpha = 1
   }
 
   private drawPillar(x: number, y: number): void {
     const ctx = this.ctx
     const s = 58
-    ctx.globalAlpha = 0.45
-    ctx.drawImage(this.shadow, x - s * 0.85, y + s * 0.26, s * 1.7, s * 0.62)
-    ctx.globalAlpha = 1
+    if (this.frShadows) {
+      ctx.globalAlpha = 0.45
+      ctx.drawImage(this.shadow, x - s * 0.85, y + s * 0.26, s * 1.7, s * 0.62)
+      ctx.globalAlpha = 1
+    }
     ctx.fillStyle = '#0d0e11'
     ctx.fillRect(x - s / 2 - 3, y - s / 2 - 3, s + 6, s + 6)
     ctx.fillStyle = '#3d4149'
@@ -1130,9 +1513,11 @@ export class GameEngine {
     const ctx = this.ctx
     const w = 132
     const h = 38
-    ctx.globalAlpha = 0.4
-    ctx.drawImage(this.shadow, x - w / 2, y + h / 2 - 8, w, 18)
-    ctx.globalAlpha = 1
+    if (this.frShadows) {
+      ctx.globalAlpha = 0.4
+      ctx.drawImage(this.shadow, x - w / 2, y + h / 2 - 8, w, 18)
+      ctx.globalAlpha = 1
+    }
     ctx.fillStyle = '#0f1013'
     ctx.fillRect(x - w / 2 - 2, y - h / 2 - 2, w + 4, h + 4)
     for (let i = 0; i < 4; i++) {
@@ -1150,20 +1535,26 @@ export class GameEngine {
     player: { x: number; y: number }; paint: number; firing: boolean
     aim: { x: number; y: number }; active: string; shots: number
     weapons: { id: string; unlocked: boolean }[]
+    profile: string; perfLevel: number; frameMs: number; dpr: number; parts: number
   } {
     return {
       chunks: this.level.chunkNames,
       W: this.level.W,
       H: this.level.H,
-      enemies: this.enemies.length,
+      enemies: this.enemyCount,
       time: this.time,
       player: { x: this.p.x, y: this.p.y },
       paint: this.p.paint,
       firing: this.p.firing,
       aim: { x: this.p.aimX, y: this.p.aimY },
       active: this.activeId,
-      shots: this.shots.length,
+      shots: this.shotCount,
       weapons: this.weapons.map((w) => ({ id: w.id, unlocked: w.unlocked })),
+      profile: this.profile.name,
+      perfLevel: this.perfLevel,
+      frameMs: this.frameEma,
+      dpr: this.dpr,
+      parts: this.partCount,
     }
   }
 }

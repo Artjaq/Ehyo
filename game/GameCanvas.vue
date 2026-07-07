@@ -23,8 +23,10 @@ const props = withDefaults(
   defineProps<{
     neon?: string
     difficulty?: 'easy' | 'normal' | 'hard'
+    // Profil de qualité : 'auto' détecte mobile/desktop au runtime (override possible).
+    quality?: 'auto' | 'mobile' | 'desktop'
   }>(),
-  { neon: '#ff00cc', difficulty: 'normal' },
+  { neon: '#ff00cc', difficulty: 'normal', quality: 'auto' },
 )
 
 // --- éléments DOM ---
@@ -50,6 +52,8 @@ const screen = ref<Screen>('start')
 const weaponsUi = shallowRef<WeaponUi[]>([])
 const finalStats = shallowRef<GameOverStats>({ time: '00:00', kills: 0, paint: 0 })
 const toast = shallowRef<UnlockInfo | null>(null)
+// Overlay CRT : activé selon le profil de qualité (désactivé sur mobile).
+const crtOn = ref(true)
 
 let engine: GameEngine | null = null
 let toastTimer = 0
@@ -103,8 +107,10 @@ onMounted(() => {
     aimJoyStick: aimJoyStick.value,
     neon: props.neon,
     difficulty: props.difficulty,
+    quality: props.quality,
     hooks: { hud: onHud, weapons: onWeapons, unlock: onUnlock, gameOver: onGameOver },
   })
+  crtOn.value = engine.qualityProfile.crt
   if (import.meta.env.DEV) (window as unknown as { __ngs?: GameEngine }).__ngs = engine
 })
 
@@ -121,8 +127,8 @@ onBeforeUnmount(() => {
   <div ref="wrap" class="ngs">
     <canvas ref="canvas" class="ngs-canvas"></canvas>
 
-    <!-- Overlay CRT : scanlines + vignette -->
-    <div class="ngs-crt"></div>
+    <!-- Overlay CRT (CSS uniquement, coupé sur le profil mobile) + vignette -->
+    <div v-if="crtOn" class="ngs-crt"></div>
     <div class="ngs-vignette"></div>
 
     <!-- HUD (persiste dans le DOM via v-show : les refs restent valides) -->
@@ -237,7 +243,9 @@ onBeforeUnmount(() => {
   color: #e9edf2;
   user-select: none;
   -webkit-user-select: none;
-  touch-action: none;
+  -webkit-touch-callout: none;
+  touch-action: none; /* critique : sans ça les sticks se battent contre scroll/zoom */
+  overscroll-behavior: none; /* bloque le pull-to-refresh */
   cursor: crosshair;
 }
 .ngs-canvas {
@@ -278,7 +286,9 @@ onBeforeUnmount(() => {
   inset: 0;
   z-index: 8;
   pointer-events: none;
-  padding: 14px;
+  /* Safe-areas : le HUD ne passe ni sous l'encoche ni sous la barre système */
+  padding: calc(12px + env(safe-area-inset-top, 0px)) calc(14px + env(safe-area-inset-right, 0px))
+    calc(12px + env(safe-area-inset-bottom, 0px)) calc(14px + env(safe-area-inset-left, 0px));
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -383,7 +393,7 @@ onBeforeUnmount(() => {
 }
 .ngs-toast {
   position: absolute;
-  top: 84px;
+  top: calc(84px + env(safe-area-inset-top, 0px));
   left: 50%;
   transform: translate(-50%, 0);
   z-index: 9;
@@ -503,6 +513,23 @@ onBeforeUnmount(() => {
   box-shadow: 6px 6px 0 #061214, 0 0 26px var(--neon2);
 }
 .ngs-cta.cta2:hover { box-shadow: 8px 8px 0 #061214, 0 0 32px var(--neon2); }
+
+/* Petit écran : cibles tactiles plus grandes (pouces), pas un simple scale */
+@media (max-width: 520px) {
+  .ngs-weapons {
+    gap: 12px;
+  }
+  .ngs-slot {
+    width: 54px;
+    height: 54px;
+  }
+  .ngs-slottag {
+    font-size: 15px;
+  }
+  .ngs-hpwrap {
+    width: min(280px, 72%);
+  }
+}
 
 /* game over : rouge glitch de la marque */
 .ngs-gameover { background: radial-gradient(90% 80% at 50% 45%, rgba(28, 0, 14, 0.62), rgba(0, 4, 10, 0.92)); z-index: 22; }

@@ -1,27 +1,32 @@
 // Génération de niveau par chunks composables sur une grille de cellules.
-// Remplace l'arène rectangulaire codée en dur du prototype : le monde est un réseau
-// de rues (couloirs, virages, carrefours, places) assemblé bout à bout à chaque run.
+// Le monde est un réseau de rues (couloirs, virages, carrefours, places) assemblé
+// bout à bout à chaque run.
 //
-// Principe :
-//  - Chaque chunk = motif ASCII de cellules ('.' sol jouable, '#' vide/bâtiment)
-//    défini UNE fois en orientation canonique (entrée côté Ouest), puis tourné
-//    par quarts de tour selon la direction d'assemblage.
-//  - L'assembleur avance de port en port : la sortie du chunk N devient l'entrée
-//    du chunk N+1. Les sorties non utilisées deviennent des culs-de-sac naturels.
-//  - Le résultat est "baké" en grille dense pour des requêtes O(1) : collision,
-//    spawn, flow field (guidage des ennemis autour des angles).
+// Perf mobile :
+//  - Le décor statique (sol, façades, toits, arêtes, graffitis, panneaux, logos,
+//    flaques) est PRÉ-RENDU en tuiles offscreen avec un petit cache LRU : le rendu
+//    par frame se réduit à quelques drawImage au lieu de centaines de fills,
+//    gradients et textes vectoriels.
+//  - pushOut passe par une grille spatiale d'obstacles (buckets par cellule) :
+//    chaque entité ne teste que les obstacles de SA cellule.
+//  - computeFlow / steerInto sont déroulés sans aucune allocation (l'ancien steer()
+//    créait 5 tableaux par ennemi par frame → pression GC → micro-saccades).
 
 import { NEONS } from './sprites'
 
 // Taille d'une cellule en pixels monde. Couloir standard = 4 cellules (640 px),
-// ruelle = 2 cellules (320 px) : assez large pour esquiver une horde.
+// ruelle = 2 cellules (320 px).
 export const CELL = 160
+
+// Tuiles du décor statique pré-rendu (cache LRU).
+const TILE = 512
+const TILE_CACHE_MAX = 20
 
 type Side = 'N' | 'S' | 'E' | 'W'
 
 interface Port {
   side: Side
-  at: number // index de la première cellule du span (ligne ou colonne selon le côté)
+  at: number // index de la première cellule du span
   width: number // largeur du span en cellules
 }
 
@@ -297,11 +302,17 @@ export interface Obstacle { x: number; y: number; r: number }
 export interface Pillar { x: number; y: number }
 export interface Bench { x: number; y: number }
 
+export interface LevelOpts {
+  decalDensity?: number // multiplicateur de densité des graffitis/flaques (profil)
+}
+
 const GRAFFITI_WORDS = ['REX', 'ZK', 'VYBE', 'OMEN', 'SL8', 'KAPO', 'NÎM', 'FLUX', '13', 'WAKE']
 const SIGN_NAMES = ['NORTHGATE', 'CANAL ROW', '13TH ALLEY', 'MARKET SQ', 'DOCK ST']
 
+interface TileEntry { cv: HTMLCanvasElement; last: number }
+
 // ---------------------------------------------------------------------------
-// Niveau finalisé : grille dense + requêtes gameplay + rendu du décor
+// Niveau finalisé : grille dense + requêtes gameplay + décor statique pré-rendu
 // ---------------------------------------------------------------------------
 export class Level {
   cols: number
@@ -322,11 +333,22 @@ export class Level {
   wallLogos: WallLogo[] = []
   chunkNames: string[] = [] // pour debug/inspection
 
+  private density: number
   private walkCells: number[] = [] // indices de cellules jouables (spawn sampling)
   private flow: Int32Array // distance BFS au joueur, -1 = non atteint
   private flowQueue: Int32Array
 
-  constructor(build: BuildResult) {
+  // Grille spatiale d'obstacles : bucket par cellule → pushOut en O(obstacles proches).
+  private obstacleBuckets = new Map<number, Obstacle[]>()
+
+  // Décor statique pré-rendu par tuiles (cache LRU).
+  private tileCache = new Map<number, TileEntry>()
+  private tilesX = 0
+  private pattern: CanvasPattern | null = null
+  private logos: LogoKit | null = null
+
+  constructor(build: BuildResult, density: number) {
+    this.density = density
     // Bounding box des cellules creusées + marge de 1 cellule (toits/façades autour).
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
     for (const k of build.carved.keys()) {
@@ -346,6 +368,7 @@ export class Level {
     }
     this.W = this.cols * CELL
     this.H = this.rows * CELL
+    this.tilesX = Math.ceil(this.W / TILE)
     this.spawnX = (build.spawnCell.cx - minX + margin + 0.5) * CELL
     this.spawnY = (build.spawnCell.cy - minY + margin + 0.5) * CELL
     this.chunkNames = build.placed.map((p) => p.name)
@@ -356,6 +379,7 @@ export class Level {
     for (let i = 0; i < this.grid.length; i++) if (this.grid[i]) this.walkCells.push(i)
 
     this.generateDecor()
+    this.buildObstacleBuckets()
   }
 
   // ---- Requêtes de base ----
@@ -385,7 +409,6 @@ export class Level {
   }
 
   // Déplacement d'un cercle avec glissement le long des murs (axe par axe).
-  // Remplace le clamp rectangulaire du prototype ; conserve le feeling "slide".
   moveCircle(ent: { x: number; y: number }, dx: number, dy: number, r: number): void {
     // Déjà hors zone (poussé par une explosion…) : laisser bouger pour s'échapper.
     const free = this.circleFits(ent.x, ent.y, r)
@@ -403,8 +426,51 @@ export class Level {
     }
   }
 
-  // ---- Flow field : BFS depuis le joueur, recalculé à intervalle par le moteur.
-  // Guide les ennemis au sol autour des angles (sinon ils collent aux murs).
+  // ---- Grille spatiale d'obstacles (piliers, bancs) ----
+  // Chaque obstacle est enregistré dans toutes les cellules que son cercle élargi
+  // touche ; une entité ne teste ensuite que le bucket de SA cellule.
+  private buildObstacleBuckets(): void {
+    const pad = 60 // rayon obstacle max (38) + rayon entité max (~14) + marge
+    for (const o of this.obstacles) {
+      const c0x = Math.max(0, Math.floor((o.x - o.r - pad) / CELL))
+      const c1x = Math.min(this.cols - 1, Math.floor((o.x + o.r + pad) / CELL))
+      const c0y = Math.max(0, Math.floor((o.y - o.r - pad) / CELL))
+      const c1y = Math.min(this.rows - 1, Math.floor((o.y + o.r + pad) / CELL))
+      for (let cy = c0y; cy <= c1y; cy++) {
+        for (let cx = c0x; cx <= c1x; cx++) {
+          const k = cy * this.cols + cx
+          let bucket = this.obstacleBuckets.get(k)
+          if (!bucket) {
+            bucket = []
+            this.obstacleBuckets.set(k, bucket)
+          }
+          bucket.push(o)
+        }
+      }
+    }
+  }
+
+  // Repousse une entité hors des obstacles circulaires de sa cellule.
+  pushOut(ent: { x: number; y: number }, er: number): void {
+    const cx = Math.max(0, Math.min(this.cols - 1, (ent.x / CELL) | 0))
+    const cy = Math.max(0, Math.min(this.rows - 1, (ent.y / CELL) | 0))
+    const bucket = this.obstacleBuckets.get(cy * this.cols + cx)
+    if (!bucket) return
+    for (let i = 0; i < bucket.length; i++) {
+      const o = bucket[i]
+      const dx = ent.x - o.x
+      const dy = ent.y - o.y
+      const d = Math.hypot(dx, dy)
+      const min = o.r + er
+      if (d > 0.01 && d < min) {
+        ent.x = o.x + (dx / d) * min
+        ent.y = o.y + (dy / d) * min
+      }
+    }
+  }
+
+  // ---- Flow field : BFS depuis le joueur (recalculé à intervalle par le moteur).
+  // Déroulé sans allocation : c'est un point chaud sur mobile.
   computeFlow(px: number, py: number): void {
     this.flow.fill(-1)
     const sx = Math.floor(px / CELL)
@@ -412,57 +478,74 @@ export class Level {
     if (!this.cellWalkable(sx, sy)) return
     let head = 0
     let tail = 0
-    const startIdx = sy * this.cols + sx
+    const cols = this.cols
+    const startIdx = sy * cols + sx
     this.flow[startIdx] = 0
     this.flowQueue[tail++] = startIdx
     while (head < tail) {
       const i = this.flowQueue[head++]
-      const d = this.flow[i]
-      const cx = i % this.cols
-      const cy = Math.floor(i / this.cols)
-      // 4 voisins orthogonaux
-      const neighbors = [
-        [cx - 1, cy], [cx + 1, cy], [cx, cy - 1], [cx, cy + 1],
-      ]
-      for (const [nx, ny] of neighbors) {
-        if (!this.cellWalkable(nx, ny)) continue
-        const ni = ny * this.cols + nx
-        if (this.flow[ni] !== -1) continue
-        this.flow[ni] = d + 1
-        this.flowQueue[tail++] = ni
+      const d = this.flow[i] + 1
+      const cx = i % cols
+      // 4 voisins orthogonaux, déroulés
+      if (cx > 0 && this.grid[i - 1] === 1 && this.flow[i - 1] === -1) {
+        this.flow[i - 1] = d
+        this.flowQueue[tail++] = i - 1
+      }
+      if (cx < cols - 1 && this.grid[i + 1] === 1 && this.flow[i + 1] === -1) {
+        this.flow[i + 1] = d
+        this.flowQueue[tail++] = i + 1
+      }
+      if (i >= cols && this.grid[i - cols] === 1 && this.flow[i - cols] === -1) {
+        this.flow[i - cols] = d
+        this.flowQueue[tail++] = i - cols
+      }
+      if (i < this.grid.length - cols && this.grid[i + cols] === 1 && this.flow[i + cols] === -1) {
+        this.flow[i + cols] = d
+        this.flowQueue[tail++] = i + cols
       }
     }
   }
 
   // Direction à suivre depuis (x, y) pour se rapprocher du joueur via le réseau.
-  // null = viser le joueur en ligne droite (même cellule, ou flow indisponible).
-  steer(x: number, y: number): { x: number; y: number } | null {
-    const cx = Math.floor(x / CELL)
-    const cy = Math.floor(y / CELL)
-    if (!this.cellWalkable(cx, cy)) return null
-    const i = cy * this.cols + cx
+  // Écrit dans `out` et retourne true, ou false = viser en ligne droite.
+  // Zéro allocation (appelé pour chaque ennemi au sol, chaque frame).
+  steerInto(x: number, y: number, out: { x: number; y: number }): boolean {
+    const cols = this.cols
+    const cx = (x / CELL) | 0
+    const cy = (y / CELL) | 0
+    if (cx < 0 || cy < 0 || cx >= cols || cy >= this.rows) return false
+    const i = cy * cols + cx
+    if (this.grid[i] !== 1) return false
     const d = this.flow[i]
-    if (d <= 0) return null
+    if (d <= 0) return false
     let best = -1
-    let bestD = d
-    const neighbors = [
-      [cx - 1, cy], [cx + 1, cy], [cx, cy - 1], [cx, cy + 1],
-    ]
-    for (const [nx, ny] of neighbors) {
-      if (!this.cellWalkable(nx, ny)) continue
-      const ni = ny * this.cols + nx
-      const nd = this.flow[ni]
-      if (nd !== -1 && nd < bestD) {
-        bestD = nd
-        best = ni
-      }
+    let bd = d
+    // 4 voisins déroulés
+    if (cx > 0 && this.grid[i - 1] === 1) {
+      const nd = this.flow[i - 1]
+      if (nd >= 0 && nd < bd) { bd = nd; best = i - 1 }
     }
-    if (best === -1) return null
-    const t = this.cellCenter(best)
-    const dx = t.x - x
-    const dy = t.y - y
+    if (cx < cols - 1 && this.grid[i + 1] === 1) {
+      const nd = this.flow[i + 1]
+      if (nd >= 0 && nd < bd) { bd = nd; best = i + 1 }
+    }
+    if (i >= cols && this.grid[i - cols] === 1) {
+      const nd = this.flow[i - cols]
+      if (nd >= 0 && nd < bd) { bd = nd; best = i - cols }
+    }
+    if (i < this.grid.length - cols && this.grid[i + cols] === 1) {
+      const nd = this.flow[i + cols]
+      if (nd >= 0 && nd < bd) { bd = nd; best = i + cols }
+    }
+    if (best < 0) return false
+    const tx = ((best % cols) + 0.5) * CELL
+    const ty = (((best / cols) | 0) + 0.5) * CELL
+    const dx = tx - x
+    const dy = ty - y
     const m = Math.hypot(dx, dy) || 1
-    return { x: dx / m, y: dy / m }
+    out.x = dx / m
+    out.y = dy / m
+    return true
   }
 
   // Point de spawn au sol : cellule jouable dans un anneau de distance autour du
@@ -487,7 +570,7 @@ export class Level {
     return null
   }
 
-  // ---- Décor : graffitis, panneaux, flaques, piliers, bancs ----
+  // ---- Décor : graffitis, panneaux, flaques, piliers, bancs, logos ----
   private generateDecor(): void {
     const facadeCells: number[] = [] // cellules vides avec du sol juste dessous
     const interiorCells: number[] = [] // sol entouré de sol (pour les piliers)
@@ -510,9 +593,10 @@ export class Level {
     const farFromObstacles = (x: number, y: number, min: number) =>
       this.obstacles.every((o) => Math.hypot(o.x - x, o.y - y) >= min)
 
-    // Gros graffitis néon sur les façades
+    // Gros graffitis néon sur les façades (densité scalée par le profil qualité)
+    const graffitiCap = Math.round(Math.min(40, facadeCells.length * 0.5) * this.density)
     for (const i of shuffle(facadeCells.slice())) {
-      if (this.decals.length >= Math.min(40, facadeCells.length * 0.5)) break
+      if (this.decals.length >= graffitiCap) break
       const c = this.cellCenter(i)
       this.decals.push({
         x: c.x + (Math.random() - 0.5) * 60,
@@ -525,7 +609,7 @@ export class Level {
       })
     }
     // Tags discrets au sol
-    const floorTagCount = Math.min(26, (this.walkCells.length / 12) | 0)
+    const floorTagCount = Math.round(Math.min(26, (this.walkCells.length / 12) | 0) * this.density)
     for (let i = 0; i < floorTagCount; i++) {
       const c = this.cellCenter(this.walkCells[(Math.random() * this.walkCells.length) | 0])
       this.decals.push({
@@ -573,7 +657,7 @@ export class Level {
     this.decals = this.decals.filter((d) => this.wallLogos.every((l) => Math.hypot(d.x - l.x, d.y - l.y) > 130))
 
     // Flaques avec reflets néon
-    const puddleCount = Math.min(16, (this.walkCells.length / 18) | 0)
+    const puddleCount = Math.round(Math.min(16, (this.walkCells.length / 18) | 0) * this.density)
     for (let i = 0; i < puddleCount; i++) {
       const c = this.cellCenter(this.walkCells[(Math.random() * this.walkCells.length) | 0])
       this.puddles.push({
@@ -583,7 +667,7 @@ export class Level {
         col: NEONS[(Math.random() * 4) | 0],
       })
     }
-    // Piliers en intérieur de zone (obstacles circulaires, comme le prototype)
+    // Piliers en intérieur de zone (obstacles circulaires)
     let pillarBudget = Math.min(8, Math.max(3, (interiorCells.length / 6) | 0))
     for (const i of shuffle(interiorCells.slice())) {
       if (pillarBudget <= 0) break
@@ -609,49 +693,118 @@ export class Level {
     }
   }
 
-  // ---- Rendu du décor (sol, façades, toits, arêtes) avec culling caméra ----
-  draw(
-    ctx: CanvasRenderingContext2D,
-    camX: number, camY: number, vw: number, vh: number,
-    tilePattern: CanvasPattern,
-    logos?: LogoKit,
-  ): void {
-    const c0x = Math.max(0, Math.floor((camX - 8) / CELL))
-    const c1x = Math.min(this.cols - 1, Math.floor((camX + vw + 8) / CELL))
-    const c0y = Math.max(0, Math.floor((camY - 8) / CELL))
-    const c1y = Math.min(this.rows - 1, Math.floor((camY + vh + 8) / CELL))
+  // ---------------------------------------------------------------------------
+  // Décor statique pré-rendu : tuiles offscreen + cache LRU
+  // ---------------------------------------------------------------------------
 
+  // Fournit les assets nécessaires au bake (motif béton + logos). Invalide le
+  // cache : les tuiles seront re-rendues à la demande avec les nouveaux assets.
+  setStaticAssets(pattern: CanvasPattern, logos: LogoKit): void {
+    this.pattern = pattern
+    this.logos = logos
+    this.invalidateStatic()
+  }
+
+  // À appeler quand un asset asynchrone arrive (police pixel, logos SVG).
+  invalidateStatic(): void {
+    this.tileCache.clear()
+  }
+
+  // Blitte les tuiles visibles (les rend à la demande, cache LRU borné).
+  drawStatic(ctx: CanvasRenderingContext2D, camX: number, camY: number, vw: number, vh: number, frame: number): void {
+    const tilesY = Math.ceil(this.H / TILE)
+    const t0x = Math.max(0, Math.floor(camX / TILE))
+    const t1x = Math.min(this.tilesX - 1, Math.floor((camX + vw) / TILE))
+    const t0y = Math.max(0, Math.floor(camY / TILE))
+    const t1y = Math.min(tilesY - 1, Math.floor((camY + vh) / TILE))
+    for (let ty = t0y; ty <= t1y; ty++) {
+      for (let tx = t0x; tx <= t1x; tx++) {
+        const key = ty * this.tilesX + tx
+        let entry = this.tileCache.get(key)
+        if (!entry) {
+          entry = { cv: this.renderTile(tx, ty), last: frame }
+          this.tileCache.set(key, entry)
+          this.evictTiles()
+        }
+        entry.last = frame
+        ctx.drawImage(entry.cv, tx * TILE, ty * TILE)
+      }
+    }
+  }
+
+  // Éviction LRU : borne la mémoire du cache (~20 tuiles de 512²).
+  private evictTiles(): void {
+    while (this.tileCache.size > TILE_CACHE_MAX) {
+      let oldestKey = -1
+      let oldest = Infinity
+      for (const [k, e] of this.tileCache) {
+        if (e.last < oldest) {
+          oldest = e.last
+          oldestKey = k
+        }
+      }
+      if (oldestKey < 0) return
+      this.tileCache.delete(oldestKey)
+    }
+  }
+
+  // Rend UNE tuile du décor statique : cellules (sol/façades/toits), arêtes,
+  // logo au sol, flaques, panneaux, logos muraux, graffitis. Tout ce qui était
+  // redessiné chaque frame ne coûte désormais qu'un drawImage.
+  private renderTile(tx: number, ty: number): HTMLCanvasElement {
+    const cv = document.createElement('canvas')
+    cv.width = TILE
+    cv.height = TILE
+    const ctx = cv.getContext('2d')!
+    ctx.imageSmoothingEnabled = false
+    const ox = tx * TILE
+    const oy = ty * TILE
+    ctx.translate(-ox, -oy)
+
+    // Fond toit par défaut (couvre aussi le débord hors-monde de la dernière tuile).
+    ctx.fillStyle = '#04070e'
+    ctx.fillRect(ox, oy, TILE, TILE)
+
+    const c0x = Math.max(0, Math.floor(ox / CELL))
+    const c1x = Math.min(this.cols - 1, Math.floor((ox + TILE - 1) / CELL))
+    const c0y = Math.max(0, Math.floor(oy / CELL))
+    const c1y = Math.min(this.rows - 1, Math.floor((oy + TILE - 1) / CELL))
+
+    // Passe 1 : sol / façades / toits
     for (let cy = c0y; cy <= c1y; cy++) {
       for (let cx = c0x; cx <= c1x; cx++) {
         const x = cx * CELL
         const y = cy * CELL
         if (this.cellWalkable(cx, cy)) {
-          // Sol en béton
-          ctx.fillStyle = tilePattern
-          ctx.fillRect(x, y, CELL, CELL)
+          if (this.pattern) {
+            ctx.fillStyle = this.pattern
+            ctx.fillRect(x, y, CELL, CELL)
+          } else {
+            ctx.fillStyle = '#232427'
+            ctx.fillRect(x, y, CELL, CELL)
+          }
         } else if (this.cellWalkable(cx, cy + 1)) {
-          // Façade d'immeuble (mur visible car du sol passe juste dessous)
           this.drawFacade(ctx, x, y)
         } else {
-          // Toit / vide urbain
-          ctx.fillStyle = '#04070e'
-          ctx.fillRect(x, y, CELL, CELL)
-          ctx.save()
-          ctx.globalAlpha = 0.1
-          ctx.fillStyle = tilePattern
-          ctx.fillRect(x, y, CELL, CELL)
-          ctx.restore()
+          // Toit / vide urbain : base déjà peinte, on ajoute le grain
+          if (this.pattern) {
+            ctx.save()
+            ctx.globalAlpha = 0.1
+            ctx.fillStyle = this.pattern
+            ctx.fillRect(x, y, CELL, CELL)
+            ctx.restore()
+          }
         }
       }
     }
 
-    // Arêtes des cellules de sol : ombres portées et lisières
+    // Passe 2 : arêtes des cellules de sol (ombres portées et lisières)
     for (let cy = c0y; cy <= c1y; cy++) {
       for (let cx = c0x; cx <= c1x; cx++) {
         if (!this.cellWalkable(cx, cy)) continue
         const x = cx * CELL
         const y = cy * CELL
-        // Ombre du mur au-dessus (comme la back wall du prototype)
+        // Ombre du mur au-dessus
         if (!this.cellWalkable(cx, cy - 1)) {
           const g = ctx.createLinearGradient(0, y, 0, y + 30)
           g.addColorStop(0, 'rgba(0,0,0,.55)')
@@ -690,23 +843,29 @@ export class Level {
       }
     }
 
-    // Logo blanc peint au sol (unique par niveau) — sous les entités et les splats.
-    if (this.floorLogo && logos?.white) {
+    // Bornes de recouvrement : un élément dont l'origine est hors tuile peut
+    // déborder dedans (texte tourné, logo…) → on prend une marge large.
+    const px0 = ox - 280
+    const px1 = ox + TILE + 280
+    const py0 = oy - 280
+    const py1 = oy + TILE + 280
+    const inReach = (x: number, y: number) => x > px0 && x < px1 && y > py0 && y < py1
+
+    // Logo blanc peint au sol (unique par niveau)
+    if (this.floorLogo && this.logos?.white && inReach(this.floorLogo.x, this.floorLogo.y)) {
       const f = this.floorLogo
-      if (!(f.x < camX - 200 || f.x > camX + vw + 200 || f.y < camY - 200 || f.y > camY + vh + 200)) {
-        const h = f.w * 0.75
-        ctx.save()
-        ctx.translate(f.x, f.y)
-        ctx.rotate(f.rot)
-        ctx.globalAlpha = 0.5
-        ctx.drawImage(logos.white, -f.w / 2, -h / 2, f.w, h)
-        ctx.restore()
-      }
+      const h = f.w * 0.75
+      ctx.save()
+      ctx.translate(f.x, f.y)
+      ctx.rotate(f.rot)
+      ctx.globalAlpha = 0.5
+      ctx.drawImage(this.logos.white, -f.w / 2, -h / 2, f.w, h)
+      ctx.restore()
     }
 
     // Flaques (reflets néon au sol)
     for (const pd of this.puddles) {
-      if (pd.x < camX - 100 || pd.x > camX + vw + 100 || pd.y < camY - 100 || pd.y > camY + vh + 100) continue
+      if (!inReach(pd.x, pd.y)) continue
       ctx.save()
       ctx.globalAlpha = 0.15
       ctx.fillStyle = pd.col
@@ -719,7 +878,7 @@ export class Level {
     // Panneaux de rue sur les façades
     ctx.textAlign = 'center'
     for (const s of this.signs) {
-      if (s.x < camX - 200 || s.x > camX + vw + 200 || s.y < camY - 120 || s.y > camY + vh + 120) continue
+      if (!inReach(s.x, s.y)) continue
       const w = 24 + s.txt.length * 11
       ctx.fillStyle = '#0c0d10'
       ctx.fillRect(s.x - w / 2 - 3, s.y - 3, w + 6, 46)
@@ -732,10 +891,10 @@ export class Level {
     ctx.textAlign = 'left'
 
     // Logos muraux sur les façades
-    if (logos) {
+    if (this.logos) {
       for (const lg of this.wallLogos) {
-        if (lg.x < camX - 160 || lg.x > camX + vw + 160 || lg.y < camY - 160 || lg.y > camY + vh + 160) continue
-        const img = lg.variant === 'white' ? logos.white : logos.black
+        if (!inReach(lg.x, lg.y)) continue
+        const img = lg.variant === 'white' ? this.logos.white : this.logos.black
         if (!img) continue
         const h = lg.w * 0.75
         if (lg.variant === 'black') {
@@ -755,6 +914,21 @@ export class Level {
         }
       }
     }
+
+    // Graffitis d'ambiance (texte : bakés une fois ici, plus jamais par frame)
+    for (const d of this.decals) {
+      if (!inReach(d.x, d.y)) continue
+      ctx.save()
+      ctx.translate(d.x, d.y)
+      ctx.rotate(d.rot)
+      ctx.globalAlpha = d.a
+      ctx.font = `${d.sz}px 'Press Start 2P', monospace`
+      ctx.fillStyle = d.col
+      ctx.fillText(d.txt, 0, 0)
+      ctx.restore()
+    }
+
+    return cv
   }
 
   // Façade de brique avec assises, bandeau et pied de mur.
@@ -789,14 +963,15 @@ export class Level {
 }
 
 // Génère un niveau complet (relance l'assemblage si le parcours se bloque trop tôt).
-export function generateLevel(): Level {
+export function generateLevel(opts?: LevelOpts): Level {
+  const density = opts?.decalDensity ?? 1
   let best: BuildResult | null = null
   for (let attempt = 0; attempt < 10; attempt++) {
     const build = tryBuild(8)
-    if (build.placed.length >= 6) return new Level(build)
+    if (build.placed.length >= 6) return new Level(build, density)
     if (!best || build.placed.length > best.placed.length) best = build
   }
   // Filet de sécurité : on garde le meilleur parcours obtenu (le chunk de départ
   // réussit toujours, donc `best` n'est jamais null).
-  return new Level(best!)
+  return new Level(best!, density)
 }
