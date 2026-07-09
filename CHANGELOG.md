@@ -8,6 +8,33 @@ entrée existante.
 
 ## 2026-07-10 — branche `game`
 
+**Résumé** : renommage des assets logo `chyo-*` → `ehyo-*` pour aligner le kit d'assets
+sur la marque EHYO (suite de la correction EYHO → EHYO).
+
+**Fichiers renommés**
+- `assets/picture/chyo-blanc.svg` → `ehyo-blanc.svg`
+- `assets/picture/chyo-noir.svg` → `ehyo-noir.svg`
+- `assets/picture/chyo-transparent.svg` → `ehyo-transparent.svg`
+
+**Fichiers modifiés**
+- `views/Intro.vue`, `views/HomeMenu.vue`, `views/ShopPage.vue`,
+  `views/ProductDetailPage.vue`, `views/AboutPage.vue`, `views/ContactPage.vue`
+  — import `@/assets/picture/chyo-blanc.svg` → `ehyo-blanc.svg`
+
+**Comment tester** : `npm run build` puis vérifier que le logo s'affiche sur `/`,
+`/home`, `/shop`, `/about`, `/contact` ; `grep -ri chyo views/ assets/` ne doit rien
+retourner.
+
+**Comment annuler** : `git revert` du commit correspondant (les renommages sont suivis
+par git, le revert restaure noms et imports).
+
+**TODO / limitations** : `ehyo-noir.svg` et `ehyo-transparent.svg` ne sont référencés
+nulle part dans le code (assets dormants, conservés pour le kit de marque).
+
+---
+
+## 2026-07-10 — branche `game`
+
 **Résumé** : correction de la marque résiduelle `EYHO` → `EHYO` (cohérence avec le reste
 du site et le domaine ehyo.ch).
 

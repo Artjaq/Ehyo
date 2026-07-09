@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import logoUrl from '@/assets/picture/chyo-blanc.svg'
+import logoUrl from '@/assets/picture/ehyo-blanc.svg'
 
 const router = useRouter()
 
