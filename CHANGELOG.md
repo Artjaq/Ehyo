@@ -8,6 +8,29 @@ entrée existante.
 
 ## 2026-07-10 — branche `game`
 
+**Résumé** : code-split de Three.js/TresJS — la route `/shop` devient lazy dans le
+router, ce qui sort la 3D du chunk initial (1 081 kB → 128 kB, 309 → 47 kB gzippé).
+Mise à jour de la base Browserslist (caniuse-lite) au passage.
+
+**Fichiers modifiés**
+- `router/index.ts` — `/shop` en `component: () => import(...)` (comme `/shop/:slug`,
+  `/about`, `/game`) ; import statique de `ShopPage` retiré
+- `package-lock.json` — `npx update-browserslist-db@latest` (aucun changement de cibles)
+
+**Comment tester** : `npm run build` → le chunk `index-*.js` doit faire ~128 kB et un
+chunk `products-*.js` (~950 kB, Three.js) doit apparaître. En dev : naviguer `/home` →
+`/shop` → `/shop/:slug`, la 3D doit se charger normalement à l'arrivée sur le shop.
+
+**Comment annuler** : `git revert` du commit correspondant.
+
+**TODO / limitations** : l'avertissement Vite « chunk > 500 kB » subsiste pour
+`products-*.js` — c'est Three.js lui-même, chargé seulement sur le shop ; pas d'action
+prévue. Brève latence possible à la première navigation vers `/shop` (fetch du chunk).
+
+---
+
+## 2026-07-10 — branche `game`
+
 **Résumé** : renommage des assets logo `chyo-*` → `ehyo-*` pour aligner le kit d'assets
 sur la marque EHYO (suite de la correction EYHO → EHYO).
 
