@@ -83,7 +83,7 @@ onMounted(() => {
       </div>
 
       <p class="footer-line mt-3 text-center font-press">
-        © 2025 EYHO —
+        © 2025 EHYO —
         <span class="footer-link" style="color: rgba(0,234,255,0.35)">TERMS</span>
         ·
         <span class="footer-link" style="color: rgba(255,0,204,0.35)">PRIVACY</span>

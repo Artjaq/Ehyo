@@ -6,6 +6,26 @@ entrée existante.
 
 ---
 
+## 2026-07-10 — branche `game`
+
+**Résumé** : correction de la marque résiduelle `EYHO` → `EHYO` (cohérence avec le reste
+du site et le domaine ehyo.ch).
+
+**Fichiers modifiés**
+- `views/HomeMenu.vue` — footer « © 2025 EYHO » → « © 2025 EHYO »
+- `package.json` — `name: "eyho-vue"` → `"ehyo-vue"`
+- `package-lock.json` — champs `name` alignés sur le nouveau nom de package
+
+**Comment tester** : `npm run build` (typecheck + build), puis `npm run dev` et vérifier
+le footer de `/home` (© 2025 EHYO). `grep -ri eyho package.json views/` ne doit rien retourner.
+
+**Comment annuler** : `git checkout 7240570 -- views/HomeMenu.vue package.json package-lock.json`
+
+**TODO / limitations** : le dossier local du repo s'appelle toujours `eyho-vue` (chemin
+disque, hors périmètre git) ; le nom du repo GitHub reste `Artjaq/Ehyo`.
+
+---
+
 ## 2026-07-10 — branche `chore/changelog-convention`
 
 **Résumé** : mise en place de la convention de journal de modifications (ce fichier)
