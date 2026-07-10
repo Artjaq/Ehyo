@@ -213,16 +213,29 @@ function pickWeighted(weights: Record<string, number>): string {
   return Object.keys(weights)[0]
 }
 
+// Porte de secteur : span de cellules (coords monde non normalisées) posé sur
+// le port d'entrée du premier chunk d'un nouveau secteur.
+interface GateCells {
+  cells: { x: number; y: number }[]
+}
+
+// Indices de chunk (ordre de pose) qui OUVRENT un nouveau secteur : leur port
+// d'entrée devient une porte fermée. S0 = cross + arène + 1 chunk, puis 3 chunks
+// par secteur. Au plus 3 portes (aligné sur GATE_KILLS côté moteur).
+const GATE_AT = [3, 6, 9]
+
 interface BuildResult {
   carved: Map<string, true>
   placed: PlacedChunk[]
   spawnCell: { cx: number; cy: number }
+  gates: GateCells[]
 }
 
 // Assemble une suite de chunks en avançant de port en port.
 function tryBuild(targetChunks: number): BuildResult {
   const carved = new Map<string, true>()
   const placed: PlacedChunk[] = []
+  const gates: GateCells[] = []
 
   // Pose les cellules jouables d'un chunk ; refuse tout chevauchement.
   const stamp = (rc: RotatedChunk, ox: number, oy: number): boolean => {
@@ -261,7 +274,8 @@ function tryBuild(targetChunks: number): BuildResult {
   // Tourne, aligne et pose un chunk sur le port ouvert courant ; en cas de
   // succès, avance le port sur une sortie du chunk posé. (Même math qu'avant,
   // factorisée pour servir aussi au placement garanti de l'arène.)
-  const attach = (def: ChunkDef): boolean => {
+  // gated : le span d'entrée du chunk posé devient une porte de secteur.
+  const attach = (def: ChunkDef, gated = false): boolean => {
     const entrySide = OPPOSITE[open.dir]
     const rc = rotateChunk(def, ROTATION_FOR_ENTRY[entrySide])
     const e = rc.entry
@@ -284,6 +298,19 @@ function tryBuild(targetChunks: number): BuildResult {
     }
     if (!stamp(rc, ox, oy)) return false
 
+    // Porte de secteur : les cellules du span d'entrée du chunk fraîchement posé
+    // (1 cellule de profondeur × largeur du port).
+    if (gated) {
+      const cells: { x: number; y: number }[] = []
+      for (let k = 0; k < e.width; k++) {
+        if (e.side === 'W') cells.push({ x: ox, y: oy + e.at + k })
+        else if (e.side === 'E') cells.push({ x: ox + rc.cols - 1, y: oy + e.at + k })
+        else if (e.side === 'N') cells.push({ x: ox + e.at + k, y: oy })
+        else cells.push({ x: ox + e.at + k, y: oy + rc.rows - 1 })
+      }
+      gates.push({ cells })
+    }
+
     // Prochaine sortie : au hasard parmi les exits du chunk posé.
     const exit = rc.exits[Math.floor(Math.random() * rc.exits.length)]
     open = toWorldPort(rc, ox, oy, exit)
@@ -305,9 +332,12 @@ function tryBuild(targetChunks: number): BuildResult {
     const candidates = Object.keys(weights).sort(() => Math.random() - 0.5)
     candidates.unshift(pickWeighted(weights)) // le favori d'abord
 
+    // Frontière de secteur : le prochain chunk posé (quel qu'il soit) est gaté.
+    const gated = GATE_AT.includes(placed.length)
+
     let placedOne = false
     for (const name of candidates) {
-      if (attach(CHUNK_LIB.find((c) => c.name === name)!)) {
+      if (attach(CHUNK_LIB.find((c) => c.name === name)!, gated)) {
         placedOne = true
         break
       }
@@ -315,7 +345,7 @@ function tryBuild(targetChunks: number): BuildResult {
     if (!placedOne) break // parcours bloqué : le niveau se termine en cul-de-sac
   }
 
-  return { carved, placed, spawnCell }
+  return { carved, placed, spawnCell, gates }
 }
 
 // ---------------------------------------------------------------------------
@@ -340,6 +370,9 @@ export interface FloorLogo { x: number; y: number; w: number; rot: number }
 export interface Puddle { x: number; y: number; r: number; col: string }
 // Emprise de l'arène néon en pixels monde (bornes du chunk 'arena').
 export interface ArenaRect { x0: number; y0: number; x1: number; y1: number }
+// Porte de secteur finalisée : indices de cellules (grille = 2 tant que fermée),
+// centre en px monde (feedback), état. Ouvertes dans l'ordre du tableau.
+export interface Gate { cells: number[]; x: number; y: number; open: boolean }
 export interface Obstacle { x: number; y: number; r: number }
 export interface Pillar { x: number; y: number }
 export interface Bench { x: number; y: number }
@@ -407,11 +440,16 @@ export class Level {
   floorLogo: FloorLogo | null = null // logo blanc au sol : UN SEUL par niveau
   arena: ArenaRect | null = null // emprise de l'arène néon (chunk garanti)
   arenaLogo: FloorLogo | null = null // logo EHYO géant au centre de l'arène
+  gates: Gate[] = [] // portes de secteur, dans l'ordre d'ouverture
   wallLogos: WallLogo[] = []
   chunkNames: string[] = [] // pour debug/inspection
 
   private density: number
-  private walkCells: number[] = [] // indices de cellules jouables (spawn sampling)
+  private walkCells: number[] = [] // toutes les cellules de sol (décor : monde entier)
+  // Cellules ATTEIGNABLES portes fermées comprises : seules elles reçoivent des
+  // spawns ennemis. Grossit à chaque ouverture de porte (événement rare).
+  private openCells: number[] = []
+  private openMask!: Uint8Array // 1 = cellule atteignable actuellement
   private flow: Int32Array // distance BFS au joueur, -1 = non atteint
   private flowQueue: Int32Array
 
@@ -463,11 +501,112 @@ export class Level {
 
     this.flow = new Int32Array(this.cols * this.rows).fill(-1)
     this.flowQueue = new Int32Array(this.cols * this.rows)
+    this.openMask = new Uint8Array(this.cols * this.rows)
 
-    for (let i = 0; i < this.grid.length; i++) if (this.grid[i]) this.walkCells.push(i)
+    // Portes de secteur : cellules passées de sol (stampées '.') à 2 = fermée.
+    // Le monde COMPLET est déjà dimensionné : ouvrir une porte ne fera que muter
+    // des valeurs, jamais réallouer (invariant zéro-realloc en run).
+    for (const g of build.gates) {
+      const cells: number[] = []
+      let sx = 0
+      let sy = 0
+      for (const c of g.cells) {
+        const gx = c.x - minX + margin
+        const gy = c.y - minY + margin
+        const idx = gy * this.cols + gx
+        this.grid[idx] = 2
+        cells.push(idx)
+        sx += (gx + 0.5) * CELL
+        sy += (gy + 0.5) * CELL
+      }
+      this.gates.push({ cells, x: sx / cells.length, y: sy / cells.length, open: false })
+    }
+
+    for (let i = 0; i < this.grid.length; i++) if (this.grid[i] === 1) this.walkCells.push(i)
+
+    // Atteignabilité initiale (portes fermées) depuis le spawn.
+    const spawnIdx = Math.floor(this.spawnY / CELL) * this.cols + Math.floor(this.spawnX / CELL)
+    this.floodOpen(spawnIdx)
+    // Anti-leak : une porte dont TOUT le voisinage jouable est déjà atteignable
+    // est contournée (chunks devenus adjacents sans port) → fusion : on l'ouvre
+    // d'office pour garder des paliers cohérents. Jamais de softlock.
+    for (const g of this.gates) {
+      let blocks = false
+      for (const ci of g.cells) {
+        const cx = ci % this.cols
+        const cy = (ci / this.cols) | 0
+        if (
+          (this.cellWalkable(cx - 1, cy) && !this.openMask[ci - 1]) ||
+          (this.cellWalkable(cx + 1, cy) && !this.openMask[ci + 1]) ||
+          (this.cellWalkable(cx, cy - 1) && !this.openMask[ci - this.cols]) ||
+          (this.cellWalkable(cx, cy + 1) && !this.openMask[ci + this.cols])
+        ) {
+          blocks = true
+          break
+        }
+      }
+      if (!blocks) this.openGate(g)
+    }
 
     this.generateDecor()
     this.buildObstacleBuckets()
+  }
+
+  // ---- Portes de secteur ----
+
+  // Flood fill : marque atteignable tout le sol connecté aux graines (grille==1).
+  // Réutilise flowQueue comme file (événement rare : build + ouvertures).
+  private floodOpen(...seeds: number[]): void {
+    const q = this.flowQueue
+    const cols = this.cols
+    let head = 0
+    let tail = 0
+    for (const s of seeds) {
+      if (this.grid[s] !== 1 || this.openMask[s]) continue
+      this.openMask[s] = 1
+      this.openCells.push(s)
+      q[tail++] = s
+    }
+    while (head < tail) {
+      const i = q[head++]
+      const cx = i % cols
+      const cy = (i / cols) | 0
+      // 4 voisins orthogonaux
+      if (cx > 0 && this.grid[i - 1] === 1 && !this.openMask[i - 1]) { this.openMask[i - 1] = 1; this.openCells.push(i - 1); q[tail++] = i - 1 }
+      if (cx < cols - 1 && this.grid[i + 1] === 1 && !this.openMask[i + 1]) { this.openMask[i + 1] = 1; this.openCells.push(i + 1); q[tail++] = i + 1 }
+      if (cy > 0 && this.grid[i - cols] === 1 && !this.openMask[i - cols]) { this.openMask[i - cols] = 1; this.openCells.push(i - cols); q[tail++] = i - cols }
+      if (cy < this.rows - 1 && this.grid[i + cols] === 1 && !this.openMask[i + cols]) { this.openMask[i + cols] = 1; this.openCells.push(i + cols); q[tail++] = i + cols }
+    }
+  }
+
+  // Ouvre une porte : cellules → sol, atteignabilité étendue, éviction CIBLÉE
+  // des tuiles couvrant la porte (jamais invalidateStatic : re-bake local only).
+  private openGate(g: Gate): void {
+    g.open = true
+    for (const ci of g.cells) this.grid[ci] = 1
+    this.floodOpen(...g.cells)
+    for (const ci of g.cells) {
+      const cx = ci % this.cols
+      const cy = (ci / this.cols) | 0
+      const t0x = Math.floor((cx * CELL) / TILE)
+      const t1x = Math.floor(((cx + 1) * CELL - 1) / TILE)
+      const t0y = Math.floor((cy * CELL) / TILE)
+      const t1y = Math.floor(((cy + 1) * CELL - 1) / TILE)
+      for (let ty = t0y; ty <= t1y; ty++) {
+        for (let tx = t0x; tx <= t1x; tx++) this.tileCache.delete(ty * this.tilesX + tx)
+      }
+    }
+  }
+
+  // Ouvre la prochaine porte fermée. Retourne son centre (feedback) ou null.
+  openNextGate(): { x: number; y: number } | null {
+    for (const g of this.gates) {
+      if (!g.open) {
+        this.openGate(g)
+        return { x: g.x, y: g.y }
+      }
+    }
+    return null
   }
 
   // ---- Requêtes de base ----
@@ -653,10 +792,12 @@ export class Level {
     px: number, py: number, rmin: number, rmax: number,
     camX: number, camY: number, vw: number, vh: number,
   ): { x: number; y: number } | null {
-    const n = this.walkCells.length
+    // Échantillonne les cellules ATTEIGNABLES (openCells) : pas de spawn derrière
+    // une porte fermée (l'ennemi y resterait figé, flow field à -1).
+    const n = this.openCells.length
     if (!n) return null
     for (let t = 0; t < 40; t++) {
-      const c = this.cellCenter(this.walkCells[(Math.random() * n) | 0])
+      const c = this.cellCenter(this.openCells[(Math.random() * n) | 0])
       const x = c.x + (Math.random() - 0.5) * CELL * 0.6
       const y = c.y + (Math.random() - 0.5) * CELL * 0.6
       const d = Math.hypot(x - px, y - py)
@@ -927,11 +1068,24 @@ export class Level {
     const c0y = Math.max(0, Math.floor(oy / CELL))
     const c1y = Math.min(this.rows - 1, Math.floor((oy + TILE - 1) / CELL))
 
-    // Passe 1 : sol / façades / toits
+    // Passe 1 : sol / façades / toits / portes de secteur
     for (let cy = c0y; cy <= c1y; cy++) {
       for (let cx = c0x; cx <= c1x; cx++) {
         const x = cx * CELL
         const y = cy * CELL
+        // Porte fermée (grille == 2) : sol de rue normal + barricade en travers.
+        if (this.grid[cy * this.cols + cx] === 2) {
+          if (this.pattern) {
+            ctx.fillStyle = this.pattern
+            ctx.fillRect(x, y, CELL, CELL)
+          } else {
+            ctx.fillStyle = '#232427'
+            ctx.fillRect(x, y, CELL, CELL)
+          }
+          // Passage vertical (sol au-dessus/en-dessous) → barricade horizontale.
+          this.drawGateCell(ctx, x, y, this.cellWalkable(cx, cy - 1) || this.cellWalkable(cx, cy + 1))
+          continue
+        }
         if (this.cellWalkable(cx, cy)) {
           if (this.pattern) {
             ctx.fillStyle = this.pattern
@@ -1158,6 +1312,54 @@ export class Level {
     return cv
   }
 
+  // Barricade de porte fermée, bakée dans la tuile : bandes obliques rouge
+  // glitch/noir (danger), liseré cyan, plaque « CLOSED ». horiz = barre en
+  // travers d'un passage vertical ; sinon barre verticale (passage horizontal).
+  private drawGateCell(ctx: CanvasRenderingContext2D, x: number, y: number, horiz: boolean): void {
+    const cx = x + CELL / 2
+    const cy = y + CELL / 2
+    ctx.save()
+    ctx.translate(cx, cy)
+    if (!horiz) ctx.rotate(Math.PI / 2)
+    // Halo au sol (danger diffus) + base sombre de la barre
+    ctx.globalAlpha = 0.12
+    ctx.fillStyle = '#ff004c'
+    ctx.fillRect(-CELL / 2, -30, CELL, 60)
+    ctx.globalAlpha = 1
+    ctx.fillStyle = '#101214'
+    ctx.fillRect(-CELL / 2, -17, CELL, 34)
+    // Bandes obliques rouge glitch / noir (clip sur la barre)
+    ctx.beginPath()
+    ctx.rect(-CELL / 2, -17, CELL, 34)
+    ctx.clip()
+    for (let s = -CELL; s < CELL; s += 26) {
+      ctx.fillStyle = ((s / 26) | 0) % 2 ? '#17181c' : '#ff004c'
+      ctx.beginPath()
+      ctx.moveTo(s, 17)
+      ctx.lineTo(s + 13, 17)
+      ctx.lineTo(s + 13 + 20, -17)
+      ctx.lineTo(s + 20, -17)
+      ctx.closePath()
+      ctx.fill()
+    }
+    // Liseré supérieur cyan (fil conducteur charte)
+    ctx.fillStyle = 'rgba(0,234,255,.8)'
+    ctx.fillRect(-CELL / 2, -17, CELL, 3)
+    // Montants latéraux
+    ctx.fillStyle = '#0c0d10'
+    ctx.fillRect(-CELL / 2, -22, 8, 44)
+    ctx.fillRect(CELL / 2 - 8, -22, 8, 44)
+    ctx.restore()
+    // Plaque « CLOSED » toujours horizontale (lisible quelle que soit l'orientation)
+    ctx.fillStyle = '#0c0d10'
+    ctx.fillRect(cx - 46, cy - 9, 92, 18)
+    ctx.fillStyle = '#ff004c'
+    ctx.font = "10px 'Press Start 2P', monospace"
+    ctx.textAlign = 'center'
+    ctx.fillText('CLOSED', cx, cy + 4)
+    ctx.textAlign = 'left'
+  }
+
   // Façade de brique avec assises, bandeau et pied de mur.
   private drawFacade(ctx: CanvasRenderingContext2D, x: number, y: number): void {
     ctx.fillStyle = '#10131b'
@@ -1190,11 +1392,12 @@ export class Level {
 }
 
 // Génère un niveau complet (relance l'assemblage si le parcours se bloque trop tôt).
+// 12 chunks après cross+arène : le monde est découpé en secteurs (portes GATE_AT).
 export function generateLevel(opts?: LevelOpts): Level {
   const density = opts?.decalDensity ?? 1
   let best: BuildResult | null = null
   for (let attempt = 0; attempt < 10; attempt++) {
-    const build = tryBuild(8)
+    const build = tryBuild(12)
     if (build.placed.length >= 6) return new Level(build, density)
     if (!best || build.placed.length > best.placed.length) best = build
   }

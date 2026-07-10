@@ -120,6 +120,11 @@ const BOMB_THROW = 330 // distance de lancer fixe (la direction vient de la vis�
 const BOMB_RADIUS = 80
 const BOMB_DMG = 40
 
+// Portes de secteur : paliers de kills qui ouvrent la porte suivante (source
+// unique : this.kills). Moins de portes que de paliers → paliers ignorés.
+const GATE_KILLS = [30, 75, 130]
+const GATE_HINT_TTL = 4 // durée (s) du cap pointillé vers la porte ouverte
+
 // Accessibilité : survie du joueur.
 const HIT_IFRAME = 0.45 // invulnérabilité globale après un coup (amortit les nuées)
 const REGEN_DELAY = 3.5 // secondes sans coup avant de récupérer des HP
@@ -277,6 +282,8 @@ export class GameEngine {
   private spawnT = 0
   private shake = 0
   private flowT = 0
+  private gateTier = 0 // prochain palier de GATE_KILLS à franchir
+  private gateHint = { x: 0, y: 0, ttl: 0 } // cap visuel vers la porte ouverte (scratch)
 
   // Entrées : clavier + souris (desktop) + deux joysticks tactiles (mobile).
   private keys: Record<string, boolean> = {}
@@ -444,6 +451,8 @@ export class GameEngine {
     this.spawnT = 0
     this.shake = 0
     this.flowT = 0
+    this.gateTier = 0
+    this.gateHint.ttl = 0
     this.moveJoy = null
     this.aimJoy = null
     this.mouse.down = false
@@ -911,6 +920,25 @@ export class GameEngine {
       }
     }
 
+    // Portes de secteur : palier de kills franchi → ouverture + feedback
+    // (uniquement via les systèmes existants : shake, particules, mots, cap).
+    if (this.gateTier < GATE_KILLS.length && this.kills >= GATE_KILLS[this.gateTier]) {
+      const g = L.openNextGate()
+      this.gateTier++
+      if (g) {
+        this.shake = Math.min(12, this.shake + 6)
+        this.puff(g.x, g.y, '#00eaff', 14)
+        this.spawnWord(g.x, g.y - 30, 'OPEN!', '#00eaff', 1.4)
+        this.spawnWord(p.x, p.y - 46, 'ZONE OUVERTE', '#00eaff', 1.6)
+        this.gateHint.x = g.x
+        this.gateHint.y = g.y
+        this.gateHint.ttl = GATE_HINT_TTL
+      } else {
+        this.gateTier = GATE_KILLS.length // plus de porte : on ne reteste plus
+      }
+    }
+    if (this.gateHint.ttl > 0) this.gateHint.ttl -= dt
+
     if (this.shake > 0) this.shake = Math.max(0, this.shake - dt * 22)
 
     // HUD : objet réutilisé (pas d'allocation), écrit en DOM direct côté composant.
@@ -1175,14 +1203,19 @@ export class GameEngine {
     this.shake = Math.min(12, this.shake + radius * 0.06)
   }
 
-  private spawnTag(x: number, y: number): void {
+  // Mot flottant explicite (pool FloatTag) — sert au feedback des portes.
+  private spawnWord(x: number, y: number, txt: string, col: string, life: number): void {
     if (this.tagCount >= POOL_TAGS) return
     const tg = this.tags[this.tagCount++]
     tg.x = x
     tg.y = y
-    tg.txt = KILL_WORDS[(Math.random() * KILL_WORDS.length) | 0]
-    tg.col = NEONS[(Math.random() * 4) | 0]
-    tg.life = 0.9
+    tg.txt = txt
+    tg.col = col
+    tg.life = life
+  }
+
+  private spawnTag(x: number, y: number): void {
+    this.spawnWord(x, y, KILL_WORDS[(Math.random() * KILL_WORDS.length) | 0], NEONS[(Math.random() * 4) | 0], 0.9)
   }
 
   // ---------- progression : peinture cumulée → déblocages ----------
@@ -1359,6 +1392,27 @@ export class GameEngine {
         case 4:
           this.drawProp(sl.ref as PropInst)
           break
+      }
+    }
+
+    // Cap vers la porte fraîchement ouverte : pointillés cyan depuis le joueur
+    // (même style que l'indicateur de visée, fade avec le ttl — zéro alloc).
+    if (this.state === 'playing' && this.gateHint.ttl > 0) {
+      const gh = this.gateHint
+      const gdx = gh.x - p.x
+      const gdy = gh.y - (p.y - 12)
+      const gd = Math.hypot(gdx, gdy)
+      if (gd > 60) {
+        const fade = Math.min(1, this.gateHint.ttl / GATE_HINT_TTL)
+        ctx.fillStyle = '#00eaff'
+        for (let i = 0; i < 3; i++) {
+          const dist = 52 + i * 16
+          ctx.globalAlpha = 0.6 * fade * (1 - i * 0.22)
+          ctx.beginPath()
+          ctx.arc(p.x + (gdx / gd) * dist, p.y - 12 + (gdy / gd) * dist, 2.6, 0, 7)
+          ctx.fill()
+        }
+        ctx.globalAlpha = 1
       }
     }
 
@@ -1564,6 +1618,7 @@ export class GameEngine {
     aim: { x: number; y: number }; active: string; shots: number
     weapons: { id: string; unlocked: boolean }[]
     profile: string; perfLevel: number; frameMs: number; dpr: number; parts: number
+    gatesOpen: number; gatesTotal: number; gateTier: number
   } {
     return {
       chunks: this.level.chunkNames,
@@ -1583,6 +1638,9 @@ export class GameEngine {
       frameMs: this.frameEma,
       dpr: this.dpr,
       parts: this.partCount,
+      gatesOpen: this.level.gates.filter((g) => g.open).length,
+      gatesTotal: this.level.gates.length,
+      gateTier: this.gateTier,
     }
   }
 }

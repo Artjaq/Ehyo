@@ -170,8 +170,11 @@ par quarts, assemblage port-à-port avec tirage pondéré anti-répétition. Gri
 **flow field BFS** recalculé ~toutes les 0.35 s pour le pathing. Décor et logos (kit de
 marque) bakés dans les tuiles. **Mobilier urbain data-driven** : registre `PROP_DEFS`
 dans `level.ts` (benne, barrière, cône, borne, panneaux) + sprites `buildProps()` dans
-`sprites.ts` — ajouter un prop = une entrée + un sprite, rien d'autre. **Pas de seed**
-→ génération non déterministe.
+`sprites.ts` — ajouter un prop = une entrée + un sprite, rien d'autre. **Secteurs à
+déverrouiller** : monde ~14 chunks derrière des portes (grille `2` = fermée, barricade
+bakée), ouvertes aux paliers `GATE_KILLS` (engine.ts) ; spawns ennemis limités aux
+cellules atteignables (`openCells`), anti-leak par BFS au build (cf.
+`SPECS_ENVIRONMENT.md`). **Pas de seed** → génération non déterministe.
 
 ### État actuel
 

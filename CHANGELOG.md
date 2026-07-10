@@ -6,6 +6,43 @@ entrée existante.
 
 ---
 
+## 2026-07-10 — branche `feat/secteurs`
+
+**Résumé** : Scope 2 v2 — secteurs à déverrouiller. Le monde passe à ~14 chunks découpés
+en 4 secteurs par 3 portes fermées (barricades néon bakées) ; chaque palier de kills
+(`GATE_KILLS = [30, 75, 130]`) ouvre la porte suivante avec feedback in-canvas. Zéro
+realloc en run : le monde complet est dimensionné au boot, l'ouverture mute la grille.
+
+**Fichiers modifiés**
+- `game/engine/level.ts` — enregistrement des portes dans `tryBuild`/`attach` (spans de
+  ports aux indices `GATE_AT = [3,6,9]`) ; grille `2` = porte fermée (bloque collisions,
+  flow field et spawns sans code nouveau) ; `openCells`/`openMask` + `floodOpen` (BFS,
+  réutilise `flowQueue`) ; anti-leak au build (porte contournée = fusionnée/ouverte) ;
+  `openGate` avec éviction CIBLÉE du cache de tuiles ; `openNextGate()` public ;
+  `randomSpawnPoint` échantillonne `openCells` ; rendu barricade dans `renderTile`
+  (`drawGateCell` : rayures glitch/noir, liseré cyan, plaque CLOSED) ; génération 8→12
+  chunks cibles
+- `game/engine/engine.ts` — `GATE_KILLS`/`GATE_HINT_TTL` ; vérification du palier dans
+  `update()` (une comparaison/frame) ; feedback : shake + burst de particules cyan +
+  mots flottants (« OPEN! », « ZONE OUVERTE ») + cap pointillé 4 s vers la porte
+  (scratch réutilisé, zéro alloc) ; `spawnWord()` factorisé depuis `spawnTag` ;
+  `debugInfo` expose `gatesOpen`/`gatesTotal`/`gateTier`
+- `CLAUDE.md` — section Niveau (secteurs/portes)
+
+**Comment tester** : `npm run build` puis `/game` — au départ ~1/3 du monde accessible,
+barricades visibles en bout de rue ; à 30/75/130 kills : shake, « ZONE OUVERTE », cap
+pointillé, barricade disparue et zone franchissable. Debug : `__ngs.debugInfo.gatesOpen`
+et `__ngs.kills = 30` pour forcer. Vérifié headless : 3 portes, blocage effectif,
+ouverture aux paliers, openCells 212→620, ennemis au sol jamais derrière une porte.
+
+**Comment annuler** : `git checkout 77aed1d -- game/engine/level.ts game/engine/engine.ts CLAUDE.md`
+
+**TODO / limitations** : toast Vue à l'ouverture (v2.1, demanderait un nouveau hook) ;
+les drones survolent les portes (accepté, thématique) ; paliers excédentaires ignorés
+si la génération produit moins de 3 portes.
+
+---
+
 ## 2026-07-10 — branche `game`
 
 **Résumé** : réécriture de `SPECS_ENVIRONMENT.md` (v2) pour le moteur custom — le Scope 2
