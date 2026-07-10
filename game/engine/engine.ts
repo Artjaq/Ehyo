@@ -40,6 +40,7 @@ export interface HudState {
   nextCost: number | null // coût du prochain déblocage, null si tout est ouvert
   time: string
   kills: number
+  bossPct: number // HP du boss en % ; -1 = pas de boss actif (barre masquée)
 }
 
 export interface WeaponUi {
@@ -162,7 +163,7 @@ interface PlayerState {
   safe: number // temps écoulé depuis le dernier coup (déclenche la régén)
 }
 
-type EnemyType = 'dog' | 'tagger' | 'cop' | 'buffer' | 'drone'
+type EnemyType = 'dog' | 'tagger' | 'cop' | 'buffer' | 'drone' | 'boss'
 
 interface EnemyEnt {
   type: EnemyType; spr: string
@@ -204,7 +205,15 @@ const ENEMY_DEFS: Record<EnemyType, { spr: string; hp: number; spd: number; dmg:
   cop: { spr: 'cop', hp: 64, spd: 56, dmg: 13, size: 32, xp: 6 },
   buffer: { spr: 'buffer', hp: 96, spd: 44, dmg: 11, size: 36, xp: 8 },
   drone: { spr: 'drone', hp: 24, spd: 88, dmg: 6, size: 26, xp: 3 },
+  // Jamais tiré au hasard (poids 0) : spawné une fois par run via spawnBoss().
+  boss: { spr: 'boss', hp: 1500, spd: 46, dmg: 24, size: 84, xp: 0 },
 }
+
+// THE BUFF KING : boss unique, confiné dans l'arène, déclenché aux kills.
+const BOSS_KILLS = 160 // après la dernière porte (GATE_KILLS max = 130)
+const BOSS_SLAM_CD = 3.2 // secondes entre deux slams
+const BOSS_SLAM_RANGE = 170 // portée du slam (px)
+const BOSS_SLAM_DMG = 16 // dégâts du slam (× multiplicateur de difficulté)
 
 const KILL_WORDS = ['REKT', 'BOOM', 'TAGGED', 'FRESH', 'SPLAT', "BUFF'D"]
 
@@ -276,7 +285,7 @@ export class GameEngine {
   // Scratch réutilisés chaque frame (zéro alloc).
   private mv = { x: 0, y: 0 }
   private steerV = { x: 0, y: 0 }
-  private hudState: HudState = { hpPct: 100, hp: 0, paint: 0, paintPct: 0, nextCost: null, time: '00:00', kills: 0 }
+  private hudState: HudState = { hpPct: 100, hp: 0, paint: 0, paintPct: 0, nextCost: null, time: '00:00', kills: 0, bossPct: -1 }
 
   // Politique d'effets calculée une fois par frame (lue par drawEnemy).
   private frGlowMode: GlowMode = 'full'
@@ -290,7 +299,12 @@ export class GameEngine {
   private shake = 0
   private flowT = 0
   private gateTier = 0 // prochain palier de GATE_KILLS à franchir
-  private gateHint = { x: 0, y: 0, ttl: 0 } // cap visuel vers la porte ouverte (scratch)
+  private gateHint = { x: 0, y: 0, ttl: 0 } // cap visuel vers porte ouverte / boss (scratch)
+  // Boss d'arène : référence stable (le swap-remove déplace les index, pas les
+  // objets), null quand mort ou pas encore apparu. Un seul boss par run.
+  private bossRef: EnemyEnt | null = null
+  private bossDone = false
+  private bossSlamT = 0
 
   // Entrées : clavier + souris (desktop) + deux joysticks tactiles (mobile).
   private keys: Record<string, boolean> = {}
@@ -460,6 +474,9 @@ export class GameEngine {
     this.flowT = 0
     this.gateTier = 0
     this.gateHint.ttl = 0
+    this.bossRef = null
+    this.bossDone = false
+    this.bossSlamT = 0
     this.moveJoy = null
     this.aimJoy = null
     this.mouse.down = false
@@ -787,7 +804,34 @@ export class GameEngine {
       const dx = p.x - e.x
       const dy = p.y - e.y
       const d = Math.hypot(dx, dy) || 1
-      if (e.type === 'drone') {
+      if (e.type === 'boss') {
+        // Boss : confiné à l'arène (ouverte et sans obstacle → ligne droite).
+        // Poursuit le joueur s'il est dedans, sinon regagne le centre.
+        const a = L.arena!
+        const pIn = p.x > a.x0 && p.x < a.x1 && p.y > a.y0 && p.y < a.y1
+        const tx = pIn ? p.x : (a.x0 + a.x1) / 2
+        const ty = pIn ? p.y : (a.y0 + a.y1) / 2
+        const bdx = tx - e.x
+        const bdy = ty - e.y
+        const bd = Math.hypot(bdx, bdy)
+        if (bd > 8) L.moveCircle(e, (bdx / bd) * e.spd * dt, (bdy / bd) * e.spd * dt, e.size * 0.28)
+        e.x = Math.max(a.x0 + 70, Math.min(a.x1 - 70, e.x))
+        e.y = Math.max(a.y0 + 70, Math.min(a.y1 - 70, e.y))
+        // Slam de zone périodique quand le joueur est à portée.
+        this.bossSlamT -= dt
+        if (this.bossSlamT <= 0 && d < BOSS_SLAM_RANGE) {
+          this.bossSlamT = BOSS_SLAM_CD
+          this.puff(e.x, e.y - 8, '#ff00cc', 16)
+          this.spawnWord(e.x, e.y - 70, 'SLAM', '#ff00cc', 0.9)
+          this.shake = Math.min(12, this.shake + 7)
+          if (p.hurt <= 0) {
+            p.hurt = HIT_IFRAME
+            p.safe = 0
+            p.hp -= BOSS_SLAM_DMG * this.dm
+            if (p.hp <= 0) return this.gameOver()
+          }
+        }
+      } else if (e.type === 'drone') {
         // Les drones volent : ligne droite au-dessus des toits.
         e.x += (dx / d) * e.spd * dt
         e.y += (dy / d) * e.spd * dt
@@ -951,6 +995,11 @@ export class GameEngine {
     }
     if (this.gateHint.ttl > 0) this.gateHint.ttl -= dt
 
+    // Boss d'arène : un seul par run, déclenché au palier de kills.
+    if (!this.bossDone && !this.bossRef && this.kills >= BOSS_KILLS) {
+      this.spawnBoss()
+    }
+
     if (this.shake > 0) this.shake = Math.max(0, this.shake - dt * 22)
 
     // HUD : objet réutilisé (pas d'allocation), écrit en DOM direct côté composant.
@@ -968,13 +1017,74 @@ export class GameEngine {
     h.nextCost = next ? next.cost : null
     h.time = this.fmt(this.time)
     h.kills = this.kills
+    h.bossPct = this.bossRef ? Math.max(0, (this.bossRef.hp / this.bossRef.maxHp) * 100) : -1
     this.hooks.hud(h)
+  }
+
+  // Fait apparaître THE BUFF KING au centre de l'arène (décalé si le joueur y
+  // est déjà) et pointe le cap dessus. Sans arène (jamais en pratique), on
+  // marque le boss comme fait pour ne pas retester chaque frame.
+  private spawnBoss(): void {
+    const a = this.level.arena
+    if (!a || this.enemyCount >= POOL_ENEMIES) {
+      this.bossDone = true
+      return
+    }
+    const acx = (a.x0 + a.x1) / 2
+    const acy = (a.y0 + a.y1) / 2
+    const d = ENEMY_DEFS.boss
+    const e = this.enemies[this.enemyCount++]
+    e.type = 'boss'
+    e.spr = d.spr
+    e.x = acx
+    // Si le joueur campe le centre, le boss tombe un peu plus bas dans l'arène.
+    e.y = Math.hypot(this.p.x - acx, this.p.y - acy) < 140 ? acy + 240 : acy
+    e.hp = d.hp * this.dm
+    e.maxHp = e.hp
+    e.spd = d.spd
+    e.dmg = d.dmg
+    e.size = d.size
+    e.xp = d.xp
+    e.face = 1
+    e.hitT = 0
+    e.flash = 0
+    e.elite = true // halo garanti même en profil mobile (glow 'near'/'elite')
+    e.scale = 1.7
+    this.bossRef = e
+    this.bossSlamT = BOSS_SLAM_CD
+    this.shake = Math.min(12, this.shake + 8)
+    this.puff(e.x, e.y - 10, '#ff00cc', 16)
+    this.spawnWord(e.x, e.y - 90, 'THE BUFF KING', '#ff00cc', 2.2)
+    this.spawnWord(this.p.x, this.p.y - 46, 'BOSS IN THE ARENA', '#ff00cc', 1.8)
+    // Cap pointillé vers l'arène (réutilise le hint des portes).
+    this.gateHint.x = e.x
+    this.gateHint.y = e.y
+    this.gateHint.ttl = GATE_HINT_TTL + 2
   }
 
   // Mort d'un ennemi : compteur, orbe de peinture, mot flottant, swap-remove.
   private killEnemyAt(i: number): void {
     const e = this.enemies[i]
     this.kills++
+    // Boss : jackpot de peinture + splat signature (explode à 0 dégât = recul
+    // + décal permanent + particules), puis l'objet repart dans le pool.
+    if (e.type === 'boss') {
+      this.bossRef = null
+      this.bossDone = true
+      this.explode(e.x, e.y, 110, 0, '#ff00cc')
+      for (let k = 0; k < 8 && this.orbCount < POOL_ORBS; k++) {
+        const o = this.orbs[this.orbCount++]
+        const ang = (k / 8) * Math.PI * 2
+        o.x = e.x + Math.cos(ang) * 30
+        o.y = e.y + Math.sin(ang) * 30
+        o.xp = 10
+        o.vx = Math.cos(ang) * 130
+        o.vy = Math.sin(ang) * 130
+        o.col = k % 2 ? '#ff00cc' : '#00eaff'
+      }
+      this.spawnWord(e.x, e.y - 60, 'BOSS DOWN', '#ff00cc', 2.2)
+      this.shake = 12
+    }
     if (this.orbCount < POOL_ORBS) {
       const o = this.orbs[this.orbCount++]
       o.x = e.x
@@ -1103,6 +1213,7 @@ export class GameEngine {
       cop: t > 25 ? 1 + t * 0.03 : 0.2,
       buffer: t > 50 ? 0.8 + t * 0.02 : 0,
       drone: t > 15 ? 1 + t * 0.02 : 0.3,
+      boss: 0, // jamais au hasard : spawnBoss() uniquement
     }
     let total = 0
     for (const k in weights) total += weights[k as EnemyType]
@@ -1631,6 +1742,7 @@ export class GameEngine {
     weapons: { id: string; unlocked: boolean }[]
     profile: string; perfLevel: number; frameMs: number; dpr: number; parts: number
     gatesOpen: number; gatesTotal: number; gateTier: number
+    boss: number | null
   } {
     return {
       chunks: this.level.chunkNames,
@@ -1653,6 +1765,7 @@ export class GameEngine {
       gatesOpen: this.level.gates.filter((g) => g.open).length,
       gatesTotal: this.level.gates.length,
       gateTier: this.gateTier,
+      boss: this.bossRef ? Math.round(this.bossRef.hp) : null,
     }
   }
 }

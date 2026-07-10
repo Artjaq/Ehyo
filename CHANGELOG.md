@@ -6,6 +6,41 @@ entrée existante.
 
 ---
 
+## 2026-07-10 — branche `feat/boss-arene`
+
+**Résumé** : boss d'arène — THE BUFF KING, nettoyeur géant couronné (accent magenta de
+l'arène). Apparaît une fois par run à `BOSS_KILLS = 160` (après la dernière porte),
+confiné dans l'arène (poursuite en ligne droite, retour au centre si le joueur fuit),
+slam de zone périodique, barre de HP dédiée dans le HUD, jackpot d'orbes + splat géant
+à sa mort. Vit dans le pool d'ennemis existant → tirs/explosions/contact gratuits.
+
+**Fichiers modifiés**
+- `game/engine/sprites.ts` — sprite `boss` (18×16, couronne ambre, armure magenta)
+- `game/engine/engine.ts` — type `'boss'` + entrée `ENEMY_DEFS` (poids 0, jamais au
+  hasard) ; constantes `BOSS_KILLS/BOSS_SLAM_*` ; `spawnBoss()` (centre arène, décalé si
+  joueur dessus, cap pointillé réutilisé) ; branche boss dans la passe ennemis
+  (confinement + slam, i-frames respectées) ; mort spéciale dans `killEnemyAt`
+  (explode 0 dégât = splat + recul, 8 orbes, « BOSS DOWN ») ; `HudState.bossPct`
+  (-1 = masqué) ; `bossRef` stable (le swap-remove déplace les index, pas les objets) ;
+  `debugInfo.boss`
+- `game/GameCanvas.vue` — barre de HP boss (label + jauge magenta) écrite en DOM direct
+- `CLAUDE.md` — état actuel (boss)
+
+**Comment tester** : `npm run build` puis `/game`, atteindre 160 kills (ou
+`__ngs.kills = 160`) → « BOSS IN THE ARENA », cap vers l'arène, barre THE BUFF KING ;
+au corps-à-corps : contact + SLAM toutes les 3.2 s ; fuir l'arène → le boss y reste ;
+le tuer → splat géant, 8 orbes, barre masquée. Vérifié headless (screenshots + mesures :
+130→100 HP en 4 s au contact, confinement OK, 9 orbes à la mort).
+
+**Comment annuler** : `git checkout 069e702 -- game/engine/engine.ts game/engine/sprites.ts game/GameCanvas.vue CLAUDE.md`
+
+**TODO / limitations** : un seul boss par run (pas de re-pop) ; en test forcé
+(kills 0→160 d'un coup) les mots flottants porte+boss se chevauchent une seconde —
+impossible en partie réelle (paliers espacés de 30+ kills). Équilibrage : HP 1500 × dm,
+slam 16 × dm — à ajuster en vraie partie si besoin.
+
+---
+
 ## 2026-07-10 — branche `feat/zone-toast`
 
 **Résumé** : v2.1 des secteurs — toast Vue « ZONE OPEN x/y » à l'ouverture d'une porte,

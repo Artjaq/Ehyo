@@ -46,6 +46,9 @@ const hpFill = ref<HTMLDivElement | null>(null)
 const hpText = ref<HTMLSpanElement | null>(null)
 const timeEl = ref<HTMLSpanElement | null>(null)
 const killEl = ref<HTMLElement | null>(null)
+// Barre de HP du boss : affichée/masquée et remplie en DOM direct chaque frame.
+const bossWrap = ref<HTMLDivElement | null>(null)
+const bossFill = ref<HTMLDivElement | null>(null)
 
 // --- état réactif basse fréquence ---
 type Screen = 'start' | 'playing' | 'over'
@@ -71,6 +74,8 @@ function onHud(h: HudState): void {
   if (killEl.value) killEl.value.textContent = String(h.kills)
   if (nextWrap.value) nextWrap.value.style.visibility = h.nextCost === null ? 'hidden' : 'visible'
   if (nextEl.value && h.nextCost !== null) nextEl.value.textContent = String(h.nextCost)
+  if (bossWrap.value) bossWrap.value.style.display = h.bossPct >= 0 ? 'block' : 'none'
+  if (bossFill.value && h.bossPct >= 0) bossFill.value.style.width = h.bossPct + '%'
 }
 
 function onWeapons(list: WeaponUi[]): void {
@@ -153,6 +158,15 @@ onBeforeUnmount(() => {
         <span ref="timeEl" class="ngs-time">00:00</span>
         <span class="ngs-kills"><b ref="killEl">0</b> TAGGED</span>
       </div>
+
+      <!-- Barre de HP du boss (masquée tant qu'il n'est pas apparu) -->
+      <div ref="bossWrap" class="ngs-bosswrap" style="display: none">
+        <div class="ngs-bosslabel">THE BUFF KING</div>
+        <div class="ngs-bossbar">
+          <div ref="bossFill" class="ngs-bossfill"></div>
+        </div>
+      </div>
+
       <div class="ngs-spacer"></div>
 
       <!-- Barre d'armes : 1-4 au clavier, tapable au doigt.
@@ -360,6 +374,36 @@ onBeforeUnmount(() => {
   width: 100%;
   background: linear-gradient(90deg, #ff004c, #ffaa00);
   box-shadow: 0 0 12px rgba(255, 0, 76, 0.6);
+  transition: width 0.1s linear;
+}
+
+/* --- barre de HP du boss (magenta, accent de l'arène) --- */
+.ngs-bosswrap {
+  width: min(420px, 78%);
+  align-self: center;
+  margin-top: 2px;
+}
+.ngs-bosslabel {
+  font-family: 'Press Start 2P', monospace;
+  font-size: 8px;
+  letter-spacing: 2px;
+  color: var(--neon);
+  text-shadow: 0 0 10px var(--neon);
+  text-align: center;
+  margin-bottom: 4px;
+}
+.ngs-bossbar {
+  height: 10px;
+  border: 2px solid #0e141c;
+  background: #060b12;
+  box-shadow: 0 0 0 2px #000;
+  overflow: hidden;
+}
+.ngs-bossfill {
+  height: 100%;
+  width: 100%;
+  background: var(--neon);
+  box-shadow: 0 0 12px var(--neon);
   transition: width 0.1s linear;
 }
 
