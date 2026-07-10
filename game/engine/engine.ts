@@ -40,6 +40,7 @@ export interface HudState {
   nextCost: number | null // coût du prochain déblocage, null si tout est ouvert
   time: string
   kills: number
+  bossPct: number // HP du boss en % ; -1 = pas de boss actif (barre masquée)
 }
 
 export interface WeaponUi {
@@ -59,6 +60,13 @@ export interface UnlockInfo {
   slot: number
 }
 
+// Ouverture d'un secteur (porte tombée) : compte en SECTEURS, S0 inclus.
+export interface ZoneInfo {
+  opened: number // secteurs accessibles après l'ouverture
+  total: number // secteurs du niveau (portes + 1)
+  cache: boolean // une récompense de zone attend dans le nouveau secteur
+}
+
 export interface GameOverStats {
   time: string
   kills: number
@@ -69,6 +77,7 @@ export interface EngineHooks {
   hud(h: HudState): void
   weapons(list: WeaponUi[]): void // à chaque déblocage / changement d'arme
   unlock(info: UnlockInfo): void // toast "nouvelle arme"
+  zone(info: ZoneInfo): void // toast "zone ouverte" (rare : 3 fois par run max)
   gameOver(stats: GameOverStats): void
 }
 
@@ -89,7 +98,7 @@ export interface EngineOptions {
 // ---------------------------------------------------------------------------
 // Armes : débloquées par paliers de peinture cumulée, switch manuel 1-4.
 // ---------------------------------------------------------------------------
-type WeaponKind = 'spray' | 'fan' | 'bomb' | 'aero'
+type WeaponKind = 'spray' | 'marker' | 'bomb' | 'aero'
 
 interface WeaponDef {
   id: WeaponKind
@@ -107,8 +116,8 @@ function makeWeapons(): WeaponDef[] {
   return [
     // Tir direct rapide : l'arme de base, précise à moyenne portée.
     { id: 'spray', slot: 1, name: 'SPRAY CAN', tag: 'S', color: '#00eaff', cost: 0, rate: 0.16, cd: 0, unlocked: true },
-    // Éventail : 5 gouttes en cône, contrôle de foule à courte-moyenne portée.
-    { id: 'fan', slot: 2, name: 'FAT CAP', tag: 'F', color: '#ffaa00', cost: 28, rate: 0.55, cd: 0, unlocked: false },
+    // Marqueur : trait perçant rapide qui traverse plusieurs ennemis alignés.
+    { id: 'marker', slot: 2, name: 'MARKER', tag: 'M', color: '#ffaa00', cost: 28, rate: 0.3, cd: 0, unlocked: false },
     // Bombe lobée : explose en zone à l'impact (le splat signature du proto).
     { id: 'bomb', slot: 3, name: 'PAINT BOMB', tag: 'B', color: '#ff00cc', cost: 80, rate: 0.9, cd: 0, unlocked: false },
     // Jet d'aérosol continu : lance-flamme courte portée, gros DPS risqué.
@@ -116,9 +125,23 @@ function makeWeapons(): WeaponDef[] {
   ]
 }
 
-const BOMB_THROW = 330 // distance de lancer fixe (la direction vient de la visée)
+// Bombe : distance de jet CONTRÔLABLE par la visée (amplitude du stick / distance
+// du curseur), interpolée entre ces deux bornes. Direction = aimX/aimY.
+const BOMB_MIN_THROW = 130
+const BOMB_MAX_THROW = 520
 const BOMB_RADIUS = 80
 const BOMB_DMG = 40
+// Flaque corrosive laissée par l'explosion : zone de déni qui blesse dans le temps.
+const PUDDLE_R = 70
+const PUDDLE_DPS = 22
+const PUDDLE_TTL = 3.5
+// Marker : budget de traversée du trait perçant (nb d'ennemis touchés max).
+const MARKER_PIERCE = 4
+
+// Portes de secteur : paliers de kills qui ouvrent la porte suivante (source
+// unique : this.kills). Moins de portes que de paliers → paliers ignorés.
+const GATE_KILLS = [30, 75, 130]
+const GATE_HINT_TTL = 4 // durée (s) du cap pointillé vers la porte ouverte
 
 // Accessibilité : survie du joueur.
 const HIT_IFRAME = 0.45 // invulnérabilité globale après un coup (amortit les nuées)
@@ -134,6 +157,7 @@ const POOL_ORBS = 240
 const POOL_PARTS = 320
 const POOL_TAGS = 16
 const POOL_SPLATS = 60
+const POOL_PUDDLES = 10
 const MAX_SPLAT_BLOBS = 9
 
 // ---------------------------------------------------------------------------
@@ -144,13 +168,14 @@ interface PlayerState {
   hp: number; maxHp: number
   speed: number; face: number
   aimX: number; aimY: number // dernière direction de visée (normalisée)
+  aimReach: number // portée de visée 0..1 (amplitude stick / distance curseur)
   firing: boolean
   paint: number // peinture cumulée = monnaie de progression
   hurt: number // i-frame global : compte à rebours après un coup encaissé
   safe: number // temps écoulé depuis le dernier coup (déclenche la régén)
 }
 
-type EnemyType = 'dog' | 'tagger' | 'cop' | 'buffer' | 'drone'
+type EnemyType = 'dog' | 'tagger' | 'cop' | 'buffer' | 'drone' | 'boss'
 
 interface EnemyEnt {
   type: EnemyType; spr: string
@@ -161,14 +186,18 @@ interface EnemyEnt {
   elite: boolean; scale: number
 }
 
-// Projectile en ligne droite (spray / éventail / aérosol).
+// Projectile en ligne droite (spray / marker / aérosol).
 interface ShotEnt {
   x: number; y: number; vx: number; vy: number
   ttl: number; max: number
   dmg: number; r: number; col: string
-  kind: 'shot' | 'aero'
+  kind: 'shot' | 'aero' | 'marker'
+  pierce: number // budget de traversée (1 = meurt au 1er contact)
+  lastHit: unknown // dernier ennemi touché : évite la double-frappe sur frames consécutives
 }
 interface BombEnt { x: number; y: number; sx: number; sy: number; tx: number; ty: number; prog: number; spd: number; col: string; rot: number }
+// Flaque corrosive laissée par une explosion : dégâts/s aux ennemis dedans.
+interface PuddleEnt { x: number; y: number; r: number; dps: number; ttl: number; max: number }
 interface OrbEnt { x: number; y: number; xp: number; vx: number; vy: number; col: string }
 interface PartEnt { x: number; y: number; vx: number; vy: number; r: number; col: string; life: number; max: number }
 interface SplatBlob { dx: number; dy: number; r: number }
@@ -192,7 +221,15 @@ const ENEMY_DEFS: Record<EnemyType, { spr: string; hp: number; spd: number; dmg:
   cop: { spr: 'cop', hp: 64, spd: 56, dmg: 13, size: 32, xp: 6 },
   buffer: { spr: 'buffer', hp: 96, spd: 44, dmg: 11, size: 36, xp: 8 },
   drone: { spr: 'drone', hp: 24, spd: 88, dmg: 6, size: 26, xp: 3 },
+  // Jamais tiré au hasard (poids 0) : spawné une fois par run via spawnBoss().
+  boss: { spr: 'boss', hp: 1500, spd: 46, dmg: 24, size: 84, xp: 0 },
 }
+
+// THE BUFF KING : boss unique, confiné dans l'arène, déclenché aux kills.
+const BOSS_KILLS = 160 // après la dernière porte (GATE_KILLS max = 130)
+const BOSS_SLAM_CD = 3.2 // secondes entre deux slams
+const BOSS_SLAM_RANGE = 170 // portée du slam (px)
+const BOSS_SLAM_DMG = 16 // dégâts du slam (× multiplicateur de difficulté)
 
 const KILL_WORDS = ['REKT', 'BOOM', 'TAGGED', 'FRESH', 'SPLAT', "BUFF'D"]
 
@@ -244,6 +281,8 @@ export class GameEngine {
   private shotCount = 0
   private bombs: BombEnt[] = []
   private bombCount = 0
+  private puddles: PuddleEnt[] = []
+  private puddleCount = 0
   private orbs: OrbEnt[] = []
   private orbCount = 0
   private parts: PartEnt[] = []
@@ -264,7 +303,7 @@ export class GameEngine {
   // Scratch réutilisés chaque frame (zéro alloc).
   private mv = { x: 0, y: 0 }
   private steerV = { x: 0, y: 0 }
-  private hudState: HudState = { hpPct: 100, hp: 0, paint: 0, paintPct: 0, nextCost: null, time: '00:00', kills: 0 }
+  private hudState: HudState = { hpPct: 100, hp: 0, paint: 0, paintPct: 0, nextCost: null, time: '00:00', kills: 0, bossPct: -1 }
 
   // Politique d'effets calculée une fois par frame (lue par drawEnemy).
   private frGlowMode: GlowMode = 'full'
@@ -277,6 +316,13 @@ export class GameEngine {
   private spawnT = 0
   private shake = 0
   private flowT = 0
+  private gateTier = 0 // prochain palier de GATE_KILLS à franchir
+  private gateHint = { x: 0, y: 0, ttl: 0 } // cap visuel vers porte ouverte / boss (scratch)
+  // Boss d'arène : référence stable (le swap-remove déplace les index, pas les
+  // objets), null quand mort ou pas encore apparu. Un seul boss par run.
+  private bossRef: EnemyEnt | null = null
+  private bossDone = false
+  private bossSlamT = 0
 
   // Entrées : clavier + souris (desktop) + deux joysticks tactiles (mobile).
   private keys: Record<string, boolean> = {}
@@ -365,10 +411,13 @@ export class GameEngine {
       this.enemies.push({ type: 'dog', spr: 'dog', x: 0, y: 0, hp: 0, maxHp: 0, spd: 0, dmg: 0, size: 0, xp: 0, face: 1, hitT: 0, flash: 0, elite: false, scale: 1 })
     }
     for (let i = 0; i < POOL_SHOTS; i++) {
-      this.shots.push({ x: 0, y: 0, vx: 0, vy: 0, ttl: 0, max: 1, dmg: 0, r: 0, col: '#fff', kind: 'shot' })
+      this.shots.push({ x: 0, y: 0, vx: 0, vy: 0, ttl: 0, max: 1, dmg: 0, r: 0, col: '#fff', kind: 'shot', pierce: 1, lastHit: null })
     }
     for (let i = 0; i < POOL_BOMBS; i++) {
       this.bombs.push({ x: 0, y: 0, sx: 0, sy: 0, tx: 0, ty: 0, prog: 0, spd: 0, col: '#fff', rot: 0 })
+    }
+    for (let i = 0; i < POOL_PUDDLES; i++) {
+      this.puddles.push({ x: 0, y: 0, r: 0, dps: 0, ttl: 0, max: 1 })
     }
     for (let i = 0; i < POOL_ORBS; i++) {
       this.orbs.push({ x: 0, y: 0, xp: 0, vx: 0, vy: 0, col: '#fff' })
@@ -425,7 +474,7 @@ export class GameEngine {
     this.p = {
       x: this.level.spawnX, y: this.level.spawnY,
       hp: 130, maxHp: 130, speed: 158, face: 1,
-      aimX: 1, aimY: 0, firing: false,
+      aimX: 1, aimY: 0, aimReach: 1, firing: false,
       paint: 0,
       hurt: 0, safe: 0,
     }
@@ -434,6 +483,7 @@ export class GameEngine {
     this.enemyCount = 0
     this.shotCount = 0
     this.bombCount = 0
+    this.puddleCount = 0
     this.orbCount = 0
     this.partCount = 0
     this.tagCount = 0
@@ -444,6 +494,11 @@ export class GameEngine {
     this.spawnT = 0
     this.shake = 0
     this.flowT = 0
+    this.gateTier = 0
+    this.gateHint.ttl = 0
+    this.bossRef = null
+    this.bossDone = false
+    this.bossSlamT = 0
     this.moveJoy = null
     this.aimJoy = null
     this.mouse.down = false
@@ -613,7 +668,10 @@ export class GameEngine {
   }
 
   // Résout la visée : stick droit prioritaire (mobile), sinon souris (desktop).
-  // Met à jour p.aimX/aimY (direction persistante) et retourne l'état du tir.
+  // Met à jour p.aimX/aimY (direction persistante) + p.aimReach (portée 0..1 :
+  // amplitude du stick, ou distance du curseur normalisée sur les bornes de la
+  // bombe — la bombe tombe alors SOUS le curseur tant qu'il est dans les bornes).
+  // Retourne l'état du tir.
   private resolveAim(): boolean {
     const p = this.p
     if (this.aimJoy) {
@@ -623,6 +681,7 @@ export class GameEngine {
       if (d > AIM_TRACK) {
         p.aimX = dx / d
         p.aimY = dy / d
+        p.aimReach = Math.min(1, d / 48) // 48 = débattement max du stick de visée
       }
       return d > AIM_DEADZONE // tir continu au-delà de la zone morte
     }
@@ -636,6 +695,7 @@ export class GameEngine {
       if (d > 4) {
         p.aimX = dx / d
         p.aimY = dy / d
+        p.aimReach = Math.min(1, Math.max(0, (d - BOMB_MIN_THROW) / (BOMB_MAX_THROW - BOMB_MIN_THROW)))
       }
       return this.mouse.down
     }
@@ -754,9 +814,11 @@ export class GameEngine {
       L.computeFlow(p.x, p.y)
     }
 
-    // Vagues : courbe scalée par le profil de qualité.
+    // Vagues : courbe scalée par le profil de qualité. Départ adouci (2.3 s
+    // entre spawns au lieu de 1.75) avec une pente un peu plus raide : la
+    // densité rejoint l'ancienne courbe vers ~2 min 20 et le plancher reste 0.45.
     this.spawnT -= dt
-    const interval = (Math.max(0.45, 1.75 - this.time * 0.011) * this.profile.spawnIntervalScale) / this.dm
+    const interval = (Math.max(0.45, 2.3 - this.time * 0.013) * this.profile.spawnIntervalScale) / this.dm
     if (this.spawnT <= 0 && this.enemyCount < this.effMaxEnemies()) {
       this.spawnT = interval
       const batch = 1 + Math.floor(this.time / this.profile.batchPeriod)
@@ -771,7 +833,34 @@ export class GameEngine {
       const dx = p.x - e.x
       const dy = p.y - e.y
       const d = Math.hypot(dx, dy) || 1
-      if (e.type === 'drone') {
+      if (e.type === 'boss') {
+        // Boss : confiné à l'arène (ouverte et sans obstacle → ligne droite).
+        // Poursuit le joueur s'il est dedans, sinon regagne le centre.
+        const a = L.arena!
+        const pIn = p.x > a.x0 && p.x < a.x1 && p.y > a.y0 && p.y < a.y1
+        const tx = pIn ? p.x : (a.x0 + a.x1) / 2
+        const ty = pIn ? p.y : (a.y0 + a.y1) / 2
+        const bdx = tx - e.x
+        const bdy = ty - e.y
+        const bd = Math.hypot(bdx, bdy)
+        if (bd > 8) L.moveCircle(e, (bdx / bd) * e.spd * dt, (bdy / bd) * e.spd * dt, e.size * 0.28)
+        e.x = Math.max(a.x0 + 70, Math.min(a.x1 - 70, e.x))
+        e.y = Math.max(a.y0 + 70, Math.min(a.y1 - 70, e.y))
+        // Slam de zone périodique quand le joueur est à portée.
+        this.bossSlamT -= dt
+        if (this.bossSlamT <= 0 && d < BOSS_SLAM_RANGE) {
+          this.bossSlamT = BOSS_SLAM_CD
+          this.puff(e.x, e.y - 8, '#ff00cc', 16)
+          this.spawnWord(e.x, e.y - 70, 'SLAM', '#ff00cc', 0.9)
+          this.shake = Math.min(12, this.shake + 7)
+          if (p.hurt <= 0) {
+            p.hurt = HIT_IFRAME
+            p.safe = 0
+            p.hp -= BOSS_SLAM_DMG * this.dm
+            if (p.hp <= 0) return this.gameOver()
+          }
+        }
+      } else if (e.type === 'drone') {
         // Les drones volent : ligne droite au-dessus des toits.
         e.x += (dx / d) * e.spd * dt
         e.y += (dy / d) * e.spd * dt
@@ -827,15 +916,22 @@ export class GameEngine {
           if (cx < 0 || cx >= cols) continue
           for (let j = this.hashHeads[cy * cols + cx]; j !== -1; j = this.hashNext[j]) {
             const e = this.enemies[j]
+            if (e === s.lastHit) continue // pas de double-frappe sur frames consécutives
             const rr = e.size * 0.4 + s.r
             const ddx = e.x - s.x
             const ddy = e.y - 10 - s.y // corps ≈ 10px au-dessus des pieds
             if (ddx * ddx + ddy * ddy < rr * rr) {
               e.hp -= s.dmg
               e.flash = 1
-              this.puff(s.x, s.y, s.col, s.kind === 'aero' ? 1 : 3)
-              this.killShotAt(i)
-              continue outer
+              this.puff(s.x, s.y, s.col, s.kind === 'aero' ? 1 : 2)
+              s.lastHit = e
+              // Budget de traversée : le marker continue à travers les rangs,
+              // les autres tirs (pierce = 1) meurent au premier contact.
+              s.pierce--
+              if (s.pierce <= 0) {
+                this.killShotAt(i)
+                continue outer
+              }
             }
           }
         }
@@ -862,6 +958,38 @@ export class GameEngine {
       }
     }
 
+    // Flaques corrosives : dégâts dans le temps via le hash spatial (placée avec
+    // les bombes : elle lit le hash construit plus haut, ne pas déplacer).
+    for (let i = this.puddleCount - 1; i >= 0; i--) {
+      const pu = this.puddles[i]
+      pu.ttl -= dt
+      if (pu.ttl <= 0) {
+        this.puddleCount--
+        this.puddles[i] = this.puddles[this.puddleCount]
+        this.puddles[this.puddleCount] = pu
+        continue
+      }
+      const reach = pu.r + 40
+      const pc0x = Math.max(0, ((pu.x - reach) / CELL) | 0)
+      const pc1x = Math.min(cols - 1, ((pu.x + reach) / CELL) | 0)
+      const pc0y = Math.max(0, ((pu.y - reach) / CELL) | 0)
+      const pc1y = Math.min(rows - 1, ((pu.y + reach) / CELL) | 0)
+      for (let cy = pc0y; cy <= pc1y; cy++) {
+        for (let cx = pc0x; cx <= pc1x; cx++) {
+          for (let j = this.hashHeads[cy * cols + cx]; j !== -1; j = this.hashNext[j]) {
+            const e = this.enemies[j]
+            const rr = pu.r + e.size * 0.4
+            const ddx = e.x - pu.x
+            const ddy = e.y - pu.y
+            if (ddx * ddx + ddy * ddy < rr * rr) {
+              e.hp -= pu.dps * dt
+              e.flash = Math.max(e.flash, 0.3) // lueur douce : "en train de fondre"
+            }
+          }
+        }
+      }
+    }
+
     // Orbes de peinture : dérive + aimant + ramassage → progression.
     for (let i = this.orbCount - 1; i >= 0; i--) {
       const o = this.orbs[i]
@@ -882,6 +1010,20 @@ export class GameEngine {
         this.orbs[i] = this.orbs[this.orbCount]
         this.orbs[this.orbCount] = o
         this.gainPaint(gained)
+      }
+    }
+
+    // Caches de peinture : ramassage au contact (3 max par run — boucle triviale).
+    for (let i = 0; i < L.caches.length; i++) {
+      const c = L.caches[i]
+      if (c.taken) continue
+      const cdx = p.x - c.x
+      const cdy = p.y - c.y
+      if (cdx * cdx + cdy * cdy < 32 * 32) {
+        c.taken = true
+        this.puff(c.x, c.y - 8, '#ff00cc', 12)
+        this.spawnWord(c.x, c.y - 34, '+' + c.paint + ' PAINT', '#00eaff', 1.5)
+        this.gainPaint(c.paint)
       }
     }
 
@@ -911,6 +1053,36 @@ export class GameEngine {
       }
     }
 
+    // Portes de secteur : palier de kills franchi → ouverture + feedback
+    // (uniquement via les systèmes existants : shake, particules, mots, cap).
+    if (this.gateTier < GATE_KILLS.length && this.kills >= GATE_KILLS[this.gateTier]) {
+      const g = L.openNextGate()
+      this.gateTier++
+      if (g) {
+        this.shake = Math.min(12, this.shake + 6)
+        this.puff(g.x, g.y, '#00eaff', 14)
+        this.spawnWord(g.x, g.y - 30, 'OPEN!', '#00eaff', 1.4)
+        this.spawnWord(p.x, p.y - 46, 'ZONE OPEN', '#00eaff', 1.6)
+        this.gateHint.x = g.x
+        this.gateHint.y = g.y
+        this.gateHint.ttl = GATE_HINT_TTL
+        // Toast Vue : événement rare → réactivité légitime (cf. EngineHooks).
+        this.hooks.zone({
+          opened: this.level.gates.filter((gg) => gg.open).length + 1,
+          total: this.level.gates.length + 1,
+          cache: g.cache,
+        })
+      } else {
+        this.gateTier = GATE_KILLS.length // plus de porte : on ne reteste plus
+      }
+    }
+    if (this.gateHint.ttl > 0) this.gateHint.ttl -= dt
+
+    // Boss d'arène : un seul par run, déclenché au palier de kills.
+    if (!this.bossDone && !this.bossRef && this.kills >= BOSS_KILLS) {
+      this.spawnBoss()
+    }
+
     if (this.shake > 0) this.shake = Math.max(0, this.shake - dt * 22)
 
     // HUD : objet réutilisé (pas d'allocation), écrit en DOM direct côté composant.
@@ -928,13 +1100,74 @@ export class GameEngine {
     h.nextCost = next ? next.cost : null
     h.time = this.fmt(this.time)
     h.kills = this.kills
+    h.bossPct = this.bossRef ? Math.max(0, (this.bossRef.hp / this.bossRef.maxHp) * 100) : -1
     this.hooks.hud(h)
+  }
+
+  // Fait apparaître THE BUFF KING au centre de l'arène (décalé si le joueur y
+  // est déjà) et pointe le cap dessus. Sans arène (jamais en pratique), on
+  // marque le boss comme fait pour ne pas retester chaque frame.
+  private spawnBoss(): void {
+    const a = this.level.arena
+    if (!a || this.enemyCount >= POOL_ENEMIES) {
+      this.bossDone = true
+      return
+    }
+    const acx = (a.x0 + a.x1) / 2
+    const acy = (a.y0 + a.y1) / 2
+    const d = ENEMY_DEFS.boss
+    const e = this.enemies[this.enemyCount++]
+    e.type = 'boss'
+    e.spr = d.spr
+    e.x = acx
+    // Si le joueur campe le centre, le boss tombe un peu plus bas dans l'arène.
+    e.y = Math.hypot(this.p.x - acx, this.p.y - acy) < 140 ? acy + 240 : acy
+    e.hp = d.hp * this.dm
+    e.maxHp = e.hp
+    e.spd = d.spd
+    e.dmg = d.dmg
+    e.size = d.size
+    e.xp = d.xp
+    e.face = 1
+    e.hitT = 0
+    e.flash = 0
+    e.elite = true // halo garanti même en profil mobile (glow 'near'/'elite')
+    e.scale = 1.7
+    this.bossRef = e
+    this.bossSlamT = BOSS_SLAM_CD
+    this.shake = Math.min(12, this.shake + 8)
+    this.puff(e.x, e.y - 10, '#ff00cc', 16)
+    this.spawnWord(e.x, e.y - 90, 'THE BUFF KING', '#ff00cc', 2.2)
+    this.spawnWord(this.p.x, this.p.y - 46, 'BOSS IN THE ARENA', '#ff00cc', 1.8)
+    // Cap pointillé vers l'arène (réutilise le hint des portes).
+    this.gateHint.x = e.x
+    this.gateHint.y = e.y
+    this.gateHint.ttl = GATE_HINT_TTL + 2
   }
 
   // Mort d'un ennemi : compteur, orbe de peinture, mot flottant, swap-remove.
   private killEnemyAt(i: number): void {
     const e = this.enemies[i]
     this.kills++
+    // Boss : jackpot de peinture + splat signature (explode à 0 dégât = recul
+    // + décal permanent + particules), puis l'objet repart dans le pool.
+    if (e.type === 'boss') {
+      this.bossRef = null
+      this.bossDone = true
+      this.explode(e.x, e.y, 110, 0, '#ff00cc')
+      for (let k = 0; k < 8 && this.orbCount < POOL_ORBS; k++) {
+        const o = this.orbs[this.orbCount++]
+        const ang = (k / 8) * Math.PI * 2
+        o.x = e.x + Math.cos(ang) * 30
+        o.y = e.y + Math.sin(ang) * 30
+        o.xp = 10
+        o.vx = Math.cos(ang) * 130
+        o.vy = Math.sin(ang) * 130
+        o.col = k % 2 ? '#ff00cc' : '#00eaff'
+      }
+      this.spawnWord(e.x, e.y - 60, 'BOSS DOWN', '#ff00cc', 2.2)
+      this.shake = 12
+    }
     if (this.orbCount < POOL_ORBS) {
       const o = this.orbs[this.orbCount++]
       o.x = e.x
@@ -986,21 +1219,23 @@ export class GameEngine {
 
     switch (w.id) {
       case 'spray':
-        this.spawnShot(mx, my, base, 520, 10, 4, 1.1, '#00eaff', 'shot')
+        this.spawnShot(mx, my, base, 520, 10, 4, 1.1, '#00eaff', 'shot', 1)
         break
-      case 'fan':
-        // 5 gouttes en cône (~28°)
-        for (let i = 0; i < 5; i++) this.spawnShot(mx, my, base + (i - 2) * 0.12, 470, 7, 4, 0.75, '#ffaa00', 'shot')
+      case 'marker':
+        // Trait perçant : rapide, fin, traverse jusqu'à MARKER_PIERCE ennemis alignés.
+        this.spawnShot(mx, my, base, 640, 8, 3, 1.2, '#ffaa00', 'marker', MARKER_PIERCE)
         break
       case 'bomb': {
         if (this.bombCount < POOL_BOMBS) {
+          // Distance de jet contrôlée par la visée (amplitude stick / curseur).
+          const throwDist = BOMB_MIN_THROW + (BOMB_MAX_THROW - BOMB_MIN_THROW) * p.aimReach
           const b = this.bombs[this.bombCount++]
           b.x = mx
           b.y = my
           b.sx = mx
           b.sy = my
-          b.tx = p.x + p.aimX * BOMB_THROW
-          b.ty = p.y + p.aimY * BOMB_THROW
+          b.tx = p.x + p.aimX * throwDist
+          b.ty = p.y + p.aimY * throwDist
           b.prog = 0
           b.spd = 430
           b.col = NEONS[(Math.random() * 4) | 0]
@@ -1013,13 +1248,13 @@ export class GameEngine {
         for (let i = 0; i < 2; i++) {
           const jitter = (Math.random() - 0.5) * 0.3
           const spd = 340 + Math.random() * 120
-          this.spawnShot(mx, my, base + jitter, spd, 4, 3, 0.26 + Math.random() * 0.1, Math.random() < 0.5 ? '#39ff14' : '#8aff5c', 'aero')
+          this.spawnShot(mx, my, base + jitter, spd, 4, 3, 0.26 + Math.random() * 0.1, Math.random() < 0.5 ? '#39ff14' : '#8aff5c', 'aero', 1)
         }
         break
     }
   }
 
-  private spawnShot(x: number, y: number, angle: number, speed: number, dmg: number, r: number, ttl: number, col: string, kind: 'shot' | 'aero'): void {
+  private spawnShot(x: number, y: number, angle: number, speed: number, dmg: number, r: number, ttl: number, col: string, kind: 'shot' | 'aero' | 'marker', pierce: number): void {
     if (this.shotCount >= POOL_SHOTS) return
     const s = this.shots[this.shotCount++]
     s.x = x
@@ -1032,6 +1267,8 @@ export class GameEngine {
     s.r = r
     s.col = col
     s.kind = kind
+    s.pierce = pierce
+    s.lastHit = null
   }
 
   // Petit nuage de gouttelettes à l'impact (borné par le budget du profil).
@@ -1063,6 +1300,7 @@ export class GameEngine {
       cop: t > 25 ? 1 + t * 0.03 : 0.2,
       buffer: t > 50 ? 0.8 + t * 0.02 : 0,
       drone: t > 15 ? 1 + t * 0.02 : 0.3,
+      boss: 0, // jamais au hasard : spawnBoss() uniquement
     }
     let total = 0
     for (const k in weights) total += weights[k as EnemyType]
@@ -1143,6 +1381,18 @@ export class GameEngine {
         }
       }
     }
+    // Flaque corrosive : zone de déni qui blesse dans le temps. Seulement pour
+    // les vraies explosions de bombe (dmg > 0) — pas pour le splat de mort du boss.
+    if (dmg > 0 && this.puddleCount < POOL_PUDDLES) {
+      const pu = this.puddles[this.puddleCount++]
+      pu.x = x
+      pu.y = y
+      pu.r = PUDDLE_R
+      pu.dps = PUDDLE_DPS
+      pu.ttl = PUDDLE_TTL
+      pu.max = PUDDLE_TTL
+    }
+
     // Splat de peinture permanent (ring buffer : recouvre le plus ancien).
     const sp = this.splats[this.splatHead]
     this.splatHead = (this.splatHead + 1) % POOL_SPLATS
@@ -1175,14 +1425,19 @@ export class GameEngine {
     this.shake = Math.min(12, this.shake + radius * 0.06)
   }
 
-  private spawnTag(x: number, y: number): void {
+  // Mot flottant explicite (pool FloatTag) — sert au feedback des portes.
+  private spawnWord(x: number, y: number, txt: string, col: string, life: number): void {
     if (this.tagCount >= POOL_TAGS) return
     const tg = this.tags[this.tagCount++]
     tg.x = x
     tg.y = y
-    tg.txt = KILL_WORDS[(Math.random() * KILL_WORDS.length) | 0]
-    tg.col = NEONS[(Math.random() * 4) | 0]
-    tg.life = 0.9
+    tg.txt = txt
+    tg.col = col
+    tg.life = life
+  }
+
+  private spawnTag(x: number, y: number): void {
+    this.spawnWord(x, y, KILL_WORDS[(Math.random() * KILL_WORDS.length) | 0], NEONS[(Math.random() * 4) | 0], 0.9)
   }
 
   // ---------- progression : peinture cumulée → déblocages ----------
@@ -1271,6 +1526,28 @@ export class GameEngine {
       ctx.globalAlpha = 1
     }
 
+    // Flaques corrosives actives : disque magenta + liseré pulsé (liseré coupé
+    // sur profil bas — le disque reste : c'est une info de gameplay, pas un décor).
+    for (let i = 0; i < this.puddleCount; i++) {
+      const pu = this.puddles[i]
+      if (pu.x < x0 - 90 || pu.x > x1 + 90 || pu.y < y0 - 90 || pu.y > y1 + 90) continue
+      const fade = Math.min(1, pu.ttl / 0.6) // fondu sur les 0,6 dernières secondes
+      ctx.fillStyle = '#ff00cc'
+      ctx.globalAlpha = (this.frFx ? 0.15 + 0.04 * Math.sin(this.time * 6) : 0.16) * fade
+      ctx.beginPath()
+      ctx.arc(pu.x, pu.y, pu.r, 0, 7)
+      ctx.fill()
+      if (this.frFx) {
+        ctx.globalAlpha = 0.45 * fade
+        ctx.strokeStyle = '#ff00cc'
+        ctx.lineWidth = 2
+        ctx.beginPath()
+        ctx.arc(pu.x, pu.y, pu.r * (0.96 + 0.04 * Math.sin(this.time * 6)), 0, 7)
+        ctx.stroke()
+      }
+    }
+    ctx.globalAlpha = 1
+
     // Orbes de peinture (halo composite seulement si le profil le permet)
     for (let i = 0; i < this.orbCount; i++) {
       const o = this.orbs[i]
@@ -1294,6 +1571,16 @@ export class GameEngine {
         ctx.arc(o.x, o.y, 2.4, 0, 7)
         ctx.fill()
       }
+    }
+
+    // Caches de peinture : sprite baké + halo magenta pulsé (3 max par run,
+    // toujours affiché même en profil bas — c'est un objectif, pas du décor).
+    for (let i = 0; i < this.level.caches.length; i++) {
+      const c = this.level.caches[i]
+      if (c.taken) continue
+      if (c.x < x0 || c.x > x1 || c.y < y0 || c.y > y1) continue
+      this.glow('#ff00cc', c.x, c.y - 12, 44, 0.38 + 0.18 * Math.sin(this.time * 3.2))
+      drawSprite(ctx, this.propSpr.cache, c.x, c.y, 3.5, 1)
     }
 
     // Tri en profondeur : créneaux persistants, entités cullées à l'insertion.
@@ -1362,6 +1649,27 @@ export class GameEngine {
       }
     }
 
+    // Cap vers la porte fraîchement ouverte : pointillés cyan depuis le joueur
+    // (même style que l'indicateur de visée, fade avec le ttl — zéro alloc).
+    if (this.state === 'playing' && this.gateHint.ttl > 0) {
+      const gh = this.gateHint
+      const gdx = gh.x - p.x
+      const gdy = gh.y - (p.y - 12)
+      const gd = Math.hypot(gdx, gdy)
+      if (gd > 60) {
+        const fade = Math.min(1, this.gateHint.ttl / GATE_HINT_TTL)
+        ctx.fillStyle = '#00eaff'
+        for (let i = 0; i < 3; i++) {
+          const dist = 52 + i * 16
+          ctx.globalAlpha = 0.6 * fade * (1 - i * 0.22)
+          ctx.beginPath()
+          ctx.arc(p.x + (gdx / gd) * dist, p.y - 12 + (gdy / gd) * dist, 2.6, 0, 7)
+          ctx.fill()
+        }
+        ctx.globalAlpha = 1
+      }
+    }
+
     // Indicateur de visée : pointillés dans la direction du tir.
     if (this.state === 'playing') {
       const w = this.weapons.find((x) => x.id === this.activeId)!
@@ -1381,6 +1689,18 @@ export class GameEngine {
     for (let i = 0; i < this.shotCount; i++) {
       const s = this.shots[i]
       if (s.x < x0 || s.x > x1 || s.y < y0 || s.y > y1) continue
+      if (s.kind === 'marker') {
+        // Trait de marqueur : segment fin le long de la vélocité (pas de disque).
+        if (this.frFx) this.glow(s.col, s.x, s.y, 18, 0.5)
+        ctx.globalAlpha = 1
+        ctx.strokeStyle = s.col
+        ctx.lineWidth = 3
+        ctx.beginPath()
+        ctx.moveTo(s.x - s.vx * 0.022, s.y - s.vy * 0.022)
+        ctx.lineTo(s.x + s.vx * 0.012, s.y + s.vy * 0.012)
+        ctx.stroke()
+        continue
+      }
       const a = s.kind === 'aero' ? Math.max(0, s.ttl / s.max) : 1
       if (s.kind === 'shot' && this.frFx) this.glow(s.col, s.x, s.y, 16, 0.5)
       ctx.globalAlpha = a
@@ -1441,6 +1761,52 @@ export class GameEngine {
     }
 
     ctx.restore()
+
+    // Minimap (espace écran, coin haut-droit) : layout baké par level.ts +
+    // points dynamiques. Coût par frame : 1 drawImage + ~6 fills, zéro alloc.
+    if (this.state === 'playing') this.drawMinimap()
+  }
+
+  // Minimap : joueur, rect caméra, caches actifs (clignotants), boss.
+  private drawMinimap(): void {
+    const ctx = this.ctx
+    const L = this.level
+    const box = Math.min(150, Math.max(96, this.vw * 0.16))
+    const mini = L.getMinimap(box)
+    const ms = mini.width / L.W
+    const mx = this.vw - mini.width - 12
+    const my = 56 // sous le lien MENU (haut-droit)
+    ctx.globalAlpha = 0.85
+    ctx.fillStyle = 'rgba(0,4,10,0.78)'
+    ctx.fillRect(mx - 4, my - 4, mini.width + 8, mini.height + 8)
+    ctx.drawImage(mini, mx, my)
+    ctx.strokeStyle = 'rgba(0,234,255,0.3)'
+    ctx.lineWidth = 1
+    ctx.strokeRect(mx - 4.5, my - 4.5, mini.width + 9, mini.height + 9)
+    // Rect caméra (repère d'orientation)
+    ctx.strokeStyle = 'rgba(255,255,255,0.22)'
+    ctx.strokeRect(mx + this.cam.x * ms, my + this.cam.y * ms, this.vw * ms, this.vh * ms)
+    // Caches de peinture actifs : point magenta clignotant
+    const blink = 0.55 + 0.45 * Math.sin(this.time * 5)
+    ctx.fillStyle = '#ff00cc'
+    for (let i = 0; i < L.caches.length; i++) {
+      const c = L.caches[i]
+      if (c.taken) continue
+      ctx.globalAlpha = 0.85 * blink
+      ctx.fillRect(mx + c.x * ms - 2, my + c.y * ms - 2, 4, 4)
+    }
+    // Boss vivant : point rouge glitch clignotant
+    if (this.bossRef) {
+      ctx.globalAlpha = 0.6 + 0.4 * Math.sin(this.time * 6)
+      ctx.fillStyle = '#ff004c'
+      ctx.fillRect(mx + this.bossRef.x * ms - 2.5, my + this.bossRef.y * ms - 2.5, 5, 5)
+    }
+    // Joueur : point blanc cerclé néon
+    ctx.globalAlpha = 1
+    ctx.fillStyle = this.neon
+    ctx.fillRect(mx + this.p.x * ms - 3, my + this.p.y * ms - 3, 6, 6)
+    ctx.fillStyle = '#f4feff'
+    ctx.fillRect(mx + this.p.x * ms - 1.5, my + this.p.y * ms - 1.5, 3, 3)
   }
 
   // Dessin d'un ennemi selon la politique d'effets de la frame.
@@ -1564,6 +1930,10 @@ export class GameEngine {
     aim: { x: number; y: number }; active: string; shots: number
     weapons: { id: string; unlocked: boolean }[]
     profile: string; perfLevel: number; frameMs: number; dpr: number; parts: number
+    gatesOpen: number; gatesTotal: number; gateTier: number
+    boss: number | null
+    cachesLeft: number
+    puddles: number; aimReach: number
   } {
     return {
       chunks: this.level.chunkNames,
@@ -1583,6 +1953,13 @@ export class GameEngine {
       frameMs: this.frameEma,
       dpr: this.dpr,
       parts: this.partCount,
+      gatesOpen: this.level.gates.filter((g) => g.open).length,
+      gatesTotal: this.level.gates.length,
+      gateTier: this.gateTier,
+      boss: this.bossRef ? Math.round(this.bossRef.hp) : null,
+      cachesLeft: this.level.caches.filter((c) => !c.taken).length,
+      puddles: this.puddleCount,
+      aimReach: this.p.aimReach,
     }
   }
 }

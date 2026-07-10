@@ -6,6 +6,261 @@ entrée existante.
 
 ---
 
+## 2026-07-10 — branche `feat/weapons-rework`
+
+**Résumé** : refonte des armes 2 et 3 pour leur donner un vrai rôle. Slot 2 : FAT CAP
+(éventail) → **MARKER**, trait perçant rapide (dmg 8, cadence 0.30 s) qui traverse
+jusqu'à 4 ennemis alignés (`pierce`, anti double-frappe via `lastHit`). Slot 3 : la
+PAINT BOMB perd sa distance FIXE — le jet est **contrôlé par la visée** (`p.aimReach`
+0..1 : amplitude du stick / distance du curseur, bornes 130..520 ; à la souris la bombe
+tombe sous le curseur) et l'explosion dépose une **flaque corrosive** (r 70, 22 dégâts/s,
+3.5 s — pool 10, passe dédiée lisant le hash spatial, placée avec les bombes).
+
+**Fichiers modifiés**
+- `game/engine/engine.ts` — `WeaponKind`/`makeWeapons` (marker), `ShotEnt.pierce/lastHit`,
+  `PuddleEnt` + pool, `resolveAim` (aimReach), `fireWeapon` (marker + throwDist), passe
+  flaques dans `update()` (post-hash), flaque dans `explode()` (si dmg > 0 : pas sur le
+  splat de mort du boss), rendus marker (trait) + flaque (disque + liseré pulsé coupé en
+  perf bas), `debugInfo.puddles/aimReach`
+- `CLAUDE.md` — table d'armes + section Bombes à jour
+
+**Comment tester** : `npm run build` puis `/game` — débloquer le MARKER (28 paint,
+touche 2) : le trait ambre traverse une file d'ennemis (4 max). Bombe (touche 3) :
+curseur proche = jet court, loin = long (clamp 130/520) ; au stick, l'amplitude module.
+La flaque magenta blesse ~22/s pendant 3.5 s. Vérifié headless : pierce [8,8,8,8,0],
+jets souris 150/400/520/130, stick 325/520, DoT 22/s, expiration, témoin hors zone
+intact, rendu perf bas OK, 0 erreur console.
+
+**Comment annuler** : `git checkout 8b8f04b -- game/engine/engine.ts CLAUDE.md`
+
+**TODO / limitations** : valeurs de départ à ressentir en jeu (dmg/cadence marker,
+dps/ttl flaque, bornes de jet). Le `lastHit` ne mémorise qu'un ennemi : en tas très
+dense, un aller-retour A-B-A peut re-toucher A (rare, borné par le budget pierce).
+
+---
+
+## 2026-07-10 — branche `feat/minimap`
+
+**Résumé** : minimap en coin haut-droit du canvas — layout du monde baké dans un
+offscreen (`Level.getMinimap`) et re-baké UNIQUEMENT à l'ouverture d'une porte ; par
+frame le moteur ne paie qu'un `drawImage` + quelques points (joueur, rect caméra,
+caches clignotants, boss). Secteurs fermés assombris (teasing), portes en rouge glitch,
+arène teintée magenta. Aucun nouvel élément DOM ni hook — tout sur le canvas principal.
+
+**Fichiers modifiés**
+- `game/engine/level.ts` — `getMinimap(maxPx)` (canvas caché + `miniDirty` posé par
+  `openGate`), couleurs par état de cellule (ouvert/fermé/porte/arène)
+- `game/engine/engine.ts` — `drawMinimap()` appelé en espace écran après le
+  `ctx.restore()` (état `playing` uniquement) : fond/bordure charte, blit du layout,
+  rect caméra, points caches (magenta clignotant), boss (rouge clignotant), joueur
+  (néon + blanc) ; taille adaptative `min(150, max(96, vw×0.16))`
+
+**Comment tester** : `npm run build` puis `/game` — minimap sous le bouton MENU :
+secteurs fermés sombres, portes rouges ; ouvrir une porte (`__ngs.kills = 30`) → la
+zone s'éclaire et un point magenta clignote sur le cache ; boss → point rouge.
+Vérifié headless desktop + mobile (`?quality=mobile`) : frameMs ~16.7, perfLevel 0.
+
+**Comment annuler** : `git checkout 2e234b5 -- game/engine/level.ts game/engine/engine.ts CLAUDE.md SPECS_ENVIRONMENT.md`
+
+**TODO / limitations** : pas de points ennemis (bruit + coût, volontaire) ; la minimap
+révèle la silhouette des secteurs fermés (choix assumé : teasing d'exploration).
+
+---
+
+## 2026-07-10 — branche `feat/cache-zone`
+
+**Résumé** : récompense de zone — à chaque porte ouverte en jeu, un PAINT CACHE
+(palette de bombes néon, halo magenta pulsé) est posé **au fond du nouveau secteur**
+(queue du BFS d'atteignabilité = cellules les plus profondes). Ramassage au contact :
++30/+45/+60 peinture selon le secteur. Le toast de zone affiche « PAINT CACHE AHEAD ».
+
+**Fichiers modifiés**
+- `game/engine/level.ts` — type `Cache`, tableau `Level.caches`, placement dans
+  `openGate(g, withCache)` (cellule profonde dégagée des obstacles, 8 tentatives ;
+  pas de cache pour les fusions anti-leak du build), retour enrichi d'`openNextGate`
+- `game/engine/engine.ts` — `ZoneInfo.cache`, passe de ramassage au contact (3 max,
+  zéro alloc), rendu sprite + halo pulsé (affiché même en profil bas : c'est un
+  objectif), `debugInfo.cachesLeft`
+- `game/engine/sprites.ts` — sprite `cache` dans `buildProps` (palette + 3 bombes néon)
+- `game/GameCanvas.vue` — toast : « PAINT CACHE AHEAD » quand un cache existe
+- `CLAUDE.md`, `SPECS_ENVIRONMENT.md` — état à jour (récompense + boss marqués faits)
+
+**Comment tester** : `npm run build` puis `/game`, 30 kills (`__ngs.kills = 30`) →
+toast « PAINT CACHE AHEAD », explorer le secteur ouvert jusqu'au cache lumineux,
+marcher dessus → « +30 PAINT ». Vérifié headless : cache sur sol jouable au fond du
+secteur, ramassage 0→30 peinture, `cachesLeft` correct, cohabitation des toasts
+arme+zone sans chevauchement.
+
+**Comment annuler** : `git checkout bc6c6d0 -- game/ CLAUDE.md SPECS_ENVIRONMENT.md`
+
+**TODO / limitations** : pas de cache si la porte est fusionnée au build (anti-leak,
+voulu) ou si aucune cellule dégagée en 8 tirages (rare) — le toast dit alors
+« FOLLOW THE DOTS ». Montants 30/45/60 à ajuster au ressenti.
+
+---
+
+## 2026-07-10 — branche `game`
+
+**Résumé** : équilibrage — début de partie adouci : intervalle de spawn initial 1.75 s
+→ 2.3 s, pente 0.011 → 0.013 (≈ 30-40 % d'ennemis en moins les 2 premières minutes ;
+les courbes se rejoignent vers 2 min 20, plancher 0.45 s inchangé).
+
+**Fichiers modifiés**
+- `game/engine/engine.ts` — courbe d'intervalle de spawn dans `update()`
+
+**Comment tester** : `npm run build` puis `/game` — la première minute doit laisser le
+temps de ramasser la peinture et débloquer le FAT CAP avant d'être submergé.
+
+**Comment annuler** : restaurer `1.75 - this.time * 0.011` dans la ligne `interval`.
+
+**TODO / limitations** : tuning au ressenti — à affiner après retours en vraie partie.
+
+---
+
+## 2026-07-10 — branche `feat/boss-arene`
+
+**Résumé** : boss d'arène — THE BUFF KING, nettoyeur géant couronné (accent magenta de
+l'arène). Apparaît une fois par run à `BOSS_KILLS = 160` (après la dernière porte),
+confiné dans l'arène (poursuite en ligne droite, retour au centre si le joueur fuit),
+slam de zone périodique, barre de HP dédiée dans le HUD, jackpot d'orbes + splat géant
+à sa mort. Vit dans le pool d'ennemis existant → tirs/explosions/contact gratuits.
+
+**Fichiers modifiés**
+- `game/engine/sprites.ts` — sprite `boss` (18×16, couronne ambre, armure magenta)
+- `game/engine/engine.ts` — type `'boss'` + entrée `ENEMY_DEFS` (poids 0, jamais au
+  hasard) ; constantes `BOSS_KILLS/BOSS_SLAM_*` ; `spawnBoss()` (centre arène, décalé si
+  joueur dessus, cap pointillé réutilisé) ; branche boss dans la passe ennemis
+  (confinement + slam, i-frames respectées) ; mort spéciale dans `killEnemyAt`
+  (explode 0 dégât = splat + recul, 8 orbes, « BOSS DOWN ») ; `HudState.bossPct`
+  (-1 = masqué) ; `bossRef` stable (le swap-remove déplace les index, pas les objets) ;
+  `debugInfo.boss`
+- `game/GameCanvas.vue` — barre de HP boss (label + jauge magenta) écrite en DOM direct
+- `CLAUDE.md` — état actuel (boss)
+
+**Comment tester** : `npm run build` puis `/game`, atteindre 160 kills (ou
+`__ngs.kills = 160`) → « BOSS IN THE ARENA », cap vers l'arène, barre THE BUFF KING ;
+au corps-à-corps : contact + SLAM toutes les 3.2 s ; fuir l'arène → le boss y reste ;
+le tuer → splat géant, 8 orbes, barre masquée. Vérifié headless (screenshots + mesures :
+130→100 HP en 4 s au contact, confinement OK, 9 orbes à la mort).
+
+**Comment annuler** : `git checkout 069e702 -- game/engine/engine.ts game/engine/sprites.ts game/GameCanvas.vue CLAUDE.md`
+
+**TODO / limitations** : un seul boss par run (pas de re-pop) ; en test forcé
+(kills 0→160 d'un coup) les mots flottants porte+boss se chevauchent une seconde —
+impossible en partie réelle (paliers espacés de 30+ kills). Équilibrage : HP 1500 × dm,
+slam 16 × dm — à ajuster en vraie partie si besoin.
+
+---
+
+## 2026-07-10 — branche `feat/zone-toast`
+
+**Résumé** : v2.1 des secteurs — toast Vue « ZONE OPEN x/y » à l'ouverture d'une porte,
+via un nouveau hook typé `zone(info)` dans `EngineHooks` (événement rare → réactivité
+légitime). Harmonisation du copy : le mot flottant « ZONE OUVERTE » devient « ZONE OPEN »
+(tout le copy du jeu est en anglais).
+
+**Fichiers modifiés**
+- `game/engine/engine.ts` — interface `ZoneInfo { opened, total }` (en secteurs, S0
+  inclus), hook `zone()` dans `EngineHooks`, émission à l'ouverture d'une porte,
+  mot flottant en anglais
+- `game/GameCanvas.vue` — handler `onZone` + `zoneToast` (shallowRef) + timer dédié
+  (2,6 s, nettoyé au démontage), toast cyan `.ngs-toast-zone` positionné sous le toast
+  d'arme (les deux peuvent tomber en même temps)
+
+**Comment tester** : `npm run build` puis `/game`, atteindre 30 kills (ou
+`__ngs.kills = 30` en dev) → toast « ZONE OPEN 2/4 · FOLLOW THE DOTS » 2,6 s sous la
+barre HUD, en plus du feedback in-canvas. Vérifié headless (screenshot + disparition).
+
+**Comment annuler** : `git checkout 4e7694c -- game/engine/engine.ts game/GameCanvas.vue`
+
+**TODO / limitations** : aucun.
+
+---
+
+## 2026-07-10 — branche `feat/secteurs`
+
+**Résumé** : Scope 2 v2 — secteurs à déverrouiller. Le monde passe à ~14 chunks découpés
+en 4 secteurs par 3 portes fermées (barricades néon bakées) ; chaque palier de kills
+(`GATE_KILLS = [30, 75, 130]`) ouvre la porte suivante avec feedback in-canvas. Zéro
+realloc en run : le monde complet est dimensionné au boot, l'ouverture mute la grille.
+
+**Fichiers modifiés**
+- `game/engine/level.ts` — enregistrement des portes dans `tryBuild`/`attach` (spans de
+  ports aux indices `GATE_AT = [3,6,9]`) ; grille `2` = porte fermée (bloque collisions,
+  flow field et spawns sans code nouveau) ; `openCells`/`openMask` + `floodOpen` (BFS,
+  réutilise `flowQueue`) ; anti-leak au build (porte contournée = fusionnée/ouverte) ;
+  `openGate` avec éviction CIBLÉE du cache de tuiles ; `openNextGate()` public ;
+  `randomSpawnPoint` échantillonne `openCells` ; rendu barricade dans `renderTile`
+  (`drawGateCell` : rayures glitch/noir, liseré cyan, plaque CLOSED) ; génération 8→12
+  chunks cibles
+- `game/engine/engine.ts` — `GATE_KILLS`/`GATE_HINT_TTL` ; vérification du palier dans
+  `update()` (une comparaison/frame) ; feedback : shake + burst de particules cyan +
+  mots flottants (« OPEN! », « ZONE OUVERTE ») + cap pointillé 4 s vers la porte
+  (scratch réutilisé, zéro alloc) ; `spawnWord()` factorisé depuis `spawnTag` ;
+  `debugInfo` expose `gatesOpen`/`gatesTotal`/`gateTier`
+- `CLAUDE.md` — section Niveau (secteurs/portes)
+
+**Comment tester** : `npm run build` puis `/game` — au départ ~1/3 du monde accessible,
+barricades visibles en bout de rue ; à 30/75/130 kills : shake, « ZONE OUVERTE », cap
+pointillé, barricade disparue et zone franchissable. Debug : `__ngs.debugInfo.gatesOpen`
+et `__ngs.kills = 30` pour forcer. Vérifié headless : 3 portes, blocage effectif,
+ouverture aux paliers, openCells 212→620, ennemis au sol jamais derrière une porte.
+
+**Comment annuler** : `git checkout 77aed1d -- game/engine/level.ts game/engine/engine.ts CLAUDE.md`
+
+**TODO / limitations** : toast Vue à l'ouverture (v2.1, demanderait un nouveau hook) ;
+les drones survolent les portes (accepté, thématique) ; paliers excédentaires ignorés
+si la génération produit moins de 3 portes.
+
+---
+
+## 2026-07-10 — branche `game`
+
+**Résumé** : réécriture de `SPECS_ENVIRONMENT.md` (v2) pour le moteur custom — le Scope 2
+« expansion de map » (resize de world bounds Phaser, impossible ici sans realloc) devient
+un **déverrouillage de secteurs** : monde complet généré au boot (~14 chunks), portes
+bakées ouvertes aux paliers de kills. Spec seulement, aucune implémentation.
+
+**Fichiers modifiés**
+- `SPECS_ENVIRONMENT.md` — v2 complète (secteurs, portes grille=2, openCells,
+  anti-leak BFS, éviction ciblée du cache de tuiles, feedback in-canvas, DoD)
+
+**Comment tester** : n/a (documentation) — relire la spec avant d'implémenter.
+
+**Comment annuler** : `git checkout 156c237 -- SPECS_ENVIRONMENT.md`
+
+**TODO / limitations** : implémentation à faire après validation de la spec ;
+toast Vue et récompenses de zone repoussés en v2.1.
+
+---
+
+## 2026-07-10 — branche `feat/arene-neon`
+
+**Résumé** : arène néon v1 — salle spéciale autorée (octogone 12×12 cellules, 1920 px),
+posée de façon **garantie** sur le premier port du cross de départ (adjacente au spawn),
+avec identité visuelle propre : voile magenta au sol, périmètre néon cyan, anneau magenta
++ logo EHYO géant au centre, tags autorés aux coins, enseigne « NEON ARENA ».
+
+**Fichiers modifiés**
+- `game/engine/level.ts` — chunk `ARENA_DEF` (hors CHUNK_LIB, jamais aléatoire) ;
+  factorisation `attach()` dans `tryBuild` (même math d'alignement) + placement garanti ;
+  `Level.arena` (emprise px) / `arenaLogo` ; helpers `inArena`/`cellInArena` ; exclusion
+  du décor aléatoire dans l'arène (tags sol, flaques, piliers, bancs, props) ; décor
+  autoré ; identité visuelle bakée dans `renderTile` (voile, lisières cyan, anneau, logo)
+
+**Comment tester** : `npm run build` puis `/game` — l'arène est à un chunk du spawn
+(`__ngs.debugInfo.chunks` contient `arena` en 2ᵉ position). Vérifier : salle traversable,
+lisible comme lieu à part (sol magenta, bords cyan, anneau + logo géant), pas de mobilier
+aléatoire dedans, fluide, OK en `?quality=mobile`. Vérifié via Chrome headless (screenshots).
+
+**Comment annuler** : `git checkout d3269ef -- game/engine/level.ts` (ou drop de la branche).
+
+**TODO / limitations** : renforcement CRT/glitch à l'entrée non fait (optionnel v1,
+demanderait un hook moteur→composant) ; gameplay spécial (déclencheur, boss) hors
+périmètre v1 ; l'enseigne nord est sautée si un chunk ultérieur a creusé au-dessus (rare).
+
+---
+
 ## 2026-07-10 — branche `game`
 
 **Résumé** : ajout de `SPECS_ENVIRONMENT.md` au repo (trace de la spec d'origine).

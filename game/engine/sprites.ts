@@ -79,6 +79,24 @@ export function buildSprites(neon: string): Record<string, BakedSprite> {
       pal: { p: '#9aa0a6', b: '#2a2d33', r: '#ff004c', k: '#121418' },
       r: [[0, 0, 4, 1, 'p'], [8, 0, 4, 1, 'p'], [1, 1, 10, 1, 'k'], [3, 2, 6, 4, 'b'], [3, 3, 6, 2, 'r'], [3, 5, 6, 1, 'k']],
     },
+    // THE BUFF KING : boss de l'arène — nettoyeur géant couronné, rouleau et
+    // armure magenta (l'accent de l'arène), visière cyan.
+    boss: {
+      w: 18, h: 16, anchor: 'foot', glow: '#ff00cc',
+      pal: { g: '#797d84', v: '#00eaff', m: '#ff00cc', y: '#ffc933', w: '#5b4626', k: '#101218' },
+      r: [
+        [4, 0, 2, 2, 'y'], [8, 0, 2, 2, 'y'], [12, 0, 2, 2, 'y'], // pointes de couronne
+        [4, 2, 10, 1, 'y'], // bandeau
+        [5, 3, 8, 4, 'g'], // tête
+        [6, 4, 6, 1, 'v'], // visière
+        [3, 7, 12, 6, 'm'], // torse magenta
+        [3, 7, 12, 1, 'k'],
+        [1, 8, 2, 6, 'g'], // bras gauche
+        [15, 7, 1, 5, 'w'], // manche du rouleau
+        [14, 4, 4, 3, 'm'], // rouleau magenta
+        [5, 13, 3, 3, 'k'], [10, 13, 3, 3, 'k'], // jambes
+      ],
+    },
   }
   const out: Record<string, BakedSprite> = {}
   for (const key in P) {
@@ -129,6 +147,17 @@ export function buildProps(): Record<string, BakedSprite> {
       w: 12, h: 15, anchor: 'foot', glow: '#00eaff',
       pal: { w: '#e9edf2', k: '#101214', s: '#8f959c' },
       r: [[0, 1, 12, 5, 'w'], [2, 3, 6, 1, 'k'], [7, 2, 2, 1, 'k'], [8, 3, 2, 1, 'k'], [7, 4, 2, 1, 'k'], [5, 6, 1, 8, 's'], [4, 14, 3, 1, 'k']],
+    },
+    // Cache de peinture : récompense de zone — palette de bombes néon
+    cache: {
+      w: 14, h: 10, anchor: 'foot', glow: '#ff00cc',
+      pal: { w: '#5b4626', k: '#101218', c: '#00eaff', m: '#ff00cc', g: '#39ff14', s: '#e9edf2' },
+      r: [
+        [0, 8, 14, 2, 'w'], [0, 8, 14, 1, 'k'], // palette
+        [2, 2, 3, 6, 'c'], [2, 1, 3, 1, 's'], // bombe cyan
+        [6, 3, 3, 5, 'm'], [6, 2, 3, 1, 's'], // bombe magenta
+        [10, 2, 3, 6, 'g'], [10, 1, 3, 1, 's'], // bombe verte
+      ],
     },
   }
   const out: Record<string, BakedSprite> = {}
