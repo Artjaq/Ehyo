@@ -460,6 +460,13 @@ export class Level {
   // Grille spatiale d'obstacles : bucket par cellule → pushOut en O(obstacles proches).
   private obstacleBuckets = new Map<number, Obstacle[]>()
 
+  // Minimap : layout baké dans un offscreen, re-baké UNIQUEMENT à l'ouverture
+  // d'une porte (miniDirty) ou au resize (miniMax). Le moteur ne paie qu'un
+  // drawImage + quelques points par frame.
+  private miniCv: HTMLCanvasElement | null = null
+  private miniDirty = true
+  private miniMax = 0
+
   // Décor statique pré-rendu par tuiles (cache LRU).
   private tileCache = new Map<number, TileEntry>()
   private tilesX = 0
@@ -603,6 +610,8 @@ export class Level {
         for (let tx = t0x; tx <= t1x; tx++) this.tileCache.delete(ty * this.tilesX + tx)
       }
     }
+    this.miniDirty = true // la minimap doit refléter la porte ouverte
+
     // Récompense de zone : le BFS ajoute les cellules par distance croissante →
     // la queue du segment = le fond du secteur. On y tire une cellule dégagée.
     if (!withCache) return null
@@ -636,6 +645,46 @@ export class Level {
       }
     }
     return null
+  }
+
+  // Minimap bakée : sol ouvert (clair) / secteur fermé (assombri, teasing),
+  // portes fermées en rouge glitch, emprise de l'arène teintée magenta.
+  // Retourne toujours le même canvas tant que rien n'a changé (zéro alloc/frame ;
+  // échelle = cv.width / W côté moteur pour placer les points dynamiques).
+  getMinimap(maxPx: number): HTMLCanvasElement {
+    if (this.miniCv && !this.miniDirty && this.miniMax === maxPx) return this.miniCv
+    this.miniDirty = false
+    this.miniMax = maxPx
+    const scale = maxPx / Math.max(this.W, this.H)
+    const w = Math.max(1, Math.round(this.W * scale))
+    const h = Math.max(1, Math.round(this.H * scale))
+    if (!this.miniCv) this.miniCv = document.createElement('canvas')
+    this.miniCv.width = w
+    this.miniCv.height = h
+    const x = this.miniCv.getContext('2d')!
+    const cs = CELL * scale
+    const a = this.arena
+    for (let cy = 0; cy < this.rows; cy++) {
+      for (let cx = 0; cx < this.cols; cx++) {
+        const i = cy * this.cols + cx
+        const v = this.grid[i]
+        if (v === 0) continue
+        const px = cx * CELL
+        const py = cy * CELL
+        if (v === 2) {
+          x.fillStyle = '#ff004c' // porte fermée
+        } else if (!this.openMask[i]) {
+          x.fillStyle = '#151a21' // secteur pas encore ouvert
+        } else if (a && px >= a.x0 && px < a.x1 && py >= a.y0 && py < a.y1) {
+          x.fillStyle = '#4a2a44' // arène (accent magenta assombri)
+        } else {
+          x.fillStyle = '#39424d' // rue ouverte
+        }
+        // +0.6 px : comble les jointures d'arrondi entre cellules
+        x.fillRect(px * scale, py * scale, cs + 0.6, cs + 0.6)
+      }
+    }
+    return this.miniCv
   }
 
   // ---- Requêtes de base ----

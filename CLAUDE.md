@@ -183,7 +183,9 @@ Fonctionnel : boucle, 4 armes, 5 ennemis (dog/tagger/cop/buffer/drone volant) + 
 après 78 s + scaling temporel, **boss d'arène** (THE BUFF KING à `BOSS_KILLS = 160`,
 confiné dans l'arène, slam de zone, barre HP dédiée dans le HUD, jackpot d'orbes à sa
 mort — un par run), **récompenses de zone** (cache de peinture au fond de chaque secteur
-ouvert, +30/+45/+60), spawn en vagues, flow field, orbes de peinture (aimant),
+ouvert, +30/+45/+60), **minimap** (coin haut-droit, layout baké par `Level.getMinimap`,
+re-baké seulement à l'ouverture d'une porte ; joueur/caméra/caches/boss par-dessus),
+spawn en vagues, flow field, orbes de peinture (aimant),
 i-frames + régén, HUD, game over, génération de niveau, 3 difficultés (easy/normal/hard —
 `hard` augmente dégâts subis **et** cadence de spawn). Joueur : 130 HP, i-frame 0.45 s,
 régén après 3.5 s. Hook DEV : en dev uniquement, `window.__ngs` expose le moteur (câblé

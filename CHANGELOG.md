@@ -6,6 +6,34 @@ entrée existante.
 
 ---
 
+## 2026-07-10 — branche `feat/minimap`
+
+**Résumé** : minimap en coin haut-droit du canvas — layout du monde baké dans un
+offscreen (`Level.getMinimap`) et re-baké UNIQUEMENT à l'ouverture d'une porte ; par
+frame le moteur ne paie qu'un `drawImage` + quelques points (joueur, rect caméra,
+caches clignotants, boss). Secteurs fermés assombris (teasing), portes en rouge glitch,
+arène teintée magenta. Aucun nouvel élément DOM ni hook — tout sur le canvas principal.
+
+**Fichiers modifiés**
+- `game/engine/level.ts` — `getMinimap(maxPx)` (canvas caché + `miniDirty` posé par
+  `openGate`), couleurs par état de cellule (ouvert/fermé/porte/arène)
+- `game/engine/engine.ts` — `drawMinimap()` appelé en espace écran après le
+  `ctx.restore()` (état `playing` uniquement) : fond/bordure charte, blit du layout,
+  rect caméra, points caches (magenta clignotant), boss (rouge clignotant), joueur
+  (néon + blanc) ; taille adaptative `min(150, max(96, vw×0.16))`
+
+**Comment tester** : `npm run build` puis `/game` — minimap sous le bouton MENU :
+secteurs fermés sombres, portes rouges ; ouvrir une porte (`__ngs.kills = 30`) → la
+zone s'éclaire et un point magenta clignote sur le cache ; boss → point rouge.
+Vérifié headless desktop + mobile (`?quality=mobile`) : frameMs ~16.7, perfLevel 0.
+
+**Comment annuler** : `git checkout 2e234b5 -- game/engine/level.ts game/engine/engine.ts CLAUDE.md SPECS_ENVIRONMENT.md`
+
+**TODO / limitations** : pas de points ennemis (bruit + coût, volontaire) ; la minimap
+révèle la silhouette des secteurs fermés (choix assumé : teasing d'exploration).
+
+---
+
 ## 2026-07-10 — branche `feat/cache-zone`
 
 **Résumé** : récompense de zone — à chaque porte ouverte en jeu, un PAINT CACHE

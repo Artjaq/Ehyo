@@ -1646,6 +1646,52 @@ export class GameEngine {
     }
 
     ctx.restore()
+
+    // Minimap (espace écran, coin haut-droit) : layout baké par level.ts +
+    // points dynamiques. Coût par frame : 1 drawImage + ~6 fills, zéro alloc.
+    if (this.state === 'playing') this.drawMinimap()
+  }
+
+  // Minimap : joueur, rect caméra, caches actifs (clignotants), boss.
+  private drawMinimap(): void {
+    const ctx = this.ctx
+    const L = this.level
+    const box = Math.min(150, Math.max(96, this.vw * 0.16))
+    const mini = L.getMinimap(box)
+    const ms = mini.width / L.W
+    const mx = this.vw - mini.width - 12
+    const my = 56 // sous le lien MENU (haut-droit)
+    ctx.globalAlpha = 0.85
+    ctx.fillStyle = 'rgba(0,4,10,0.78)'
+    ctx.fillRect(mx - 4, my - 4, mini.width + 8, mini.height + 8)
+    ctx.drawImage(mini, mx, my)
+    ctx.strokeStyle = 'rgba(0,234,255,0.3)'
+    ctx.lineWidth = 1
+    ctx.strokeRect(mx - 4.5, my - 4.5, mini.width + 9, mini.height + 9)
+    // Rect caméra (repère d'orientation)
+    ctx.strokeStyle = 'rgba(255,255,255,0.22)'
+    ctx.strokeRect(mx + this.cam.x * ms, my + this.cam.y * ms, this.vw * ms, this.vh * ms)
+    // Caches de peinture actifs : point magenta clignotant
+    const blink = 0.55 + 0.45 * Math.sin(this.time * 5)
+    ctx.fillStyle = '#ff00cc'
+    for (let i = 0; i < L.caches.length; i++) {
+      const c = L.caches[i]
+      if (c.taken) continue
+      ctx.globalAlpha = 0.85 * blink
+      ctx.fillRect(mx + c.x * ms - 2, my + c.y * ms - 2, 4, 4)
+    }
+    // Boss vivant : point rouge glitch clignotant
+    if (this.bossRef) {
+      ctx.globalAlpha = 0.6 + 0.4 * Math.sin(this.time * 6)
+      ctx.fillStyle = '#ff004c'
+      ctx.fillRect(mx + this.bossRef.x * ms - 2.5, my + this.bossRef.y * ms - 2.5, 5, 5)
+    }
+    // Joueur : point blanc cerclé néon
+    ctx.globalAlpha = 1
+    ctx.fillStyle = this.neon
+    ctx.fillRect(mx + this.p.x * ms - 3, my + this.p.y * ms - 3, 6, 6)
+    ctx.fillStyle = '#f4feff'
+    ctx.fillRect(mx + this.p.x * ms - 1.5, my + this.p.y * ms - 1.5, 3, 3)
   }
 
   // Dessin d'un ennemi selon la politique d'effets de la frame.
