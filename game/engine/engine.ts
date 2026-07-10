@@ -41,6 +41,7 @@ export interface HudState {
   time: string
   kills: number
   bossPct: number // HP du boss en % ; -1 = pas de boss actif (barre masquée)
+  energyPct: number // jauge d'énergie des armes lourdes (0..100)
 }
 
 export interface WeaponUi {
@@ -110,20 +111,28 @@ interface WeaponDef {
   rate: number // secondes entre deux tirs (tir continu tant que maintenu)
   cd: number // décompte interne
   unlocked: boolean
+  heavy: boolean // arme lourde : consomme la jauge d'énergie partagée
+  ammo: number // coût d'énergie par appel de tir (0 = jamais consommateur)
 }
 
 function makeWeapons(): WeaponDef[] {
   return [
-    // Tir direct rapide : l'arme de base, précise à moyenne portée.
-    { id: 'spray', slot: 1, name: 'SPRAY CAN', tag: 'S', color: '#00eaff', cost: 0, rate: 0.16, cd: 0, unlocked: true },
+    // Tir direct rapide : l'arme de base, précise à moyenne portée. Jamais
+    // consommatrice d'énergie : toujours disponible.
+    { id: 'spray', slot: 1, name: 'SPRAY CAN', tag: 'S', color: '#00eaff', cost: 0, rate: 0.16, cd: 0, unlocked: true, heavy: false, ammo: 0 },
     // Marqueur : trait perçant rapide qui traverse plusieurs ennemis alignés.
-    { id: 'marker', slot: 2, name: 'MARKER', tag: 'M', color: '#ffaa00', cost: 28, rate: 0.3, cd: 0, unlocked: false },
+    { id: 'marker', slot: 2, name: 'MARKER', tag: 'M', color: '#ffaa00', cost: 28, rate: 0.3, cd: 0, unlocked: false, heavy: true, ammo: 3 },
     // Bombe lobée : explose en zone à l'impact (le splat signature du proto).
-    { id: 'bomb', slot: 3, name: 'PAINT BOMB', tag: 'B', color: '#ff00cc', cost: 80, rate: 0.9, cd: 0, unlocked: false },
+    { id: 'bomb', slot: 3, name: 'PAINT BOMB', tag: 'B', color: '#ff00cc', cost: 80, rate: 0.9, cd: 0, unlocked: false, heavy: true, ammo: 20 },
     // Jet d'aérosol continu : lance-flamme courte portée, gros DPS risqué.
-    { id: 'aero', slot: 4, name: 'AERO TORCH', tag: 'A', color: '#39ff14', cost: 165, rate: 0.045, cd: 0, unlocked: false },
+    { id: 'aero', slot: 4, name: 'AERO TORCH', tag: 'A', color: '#39ff14', cost: 165, rate: 0.045, cd: 0, unlocked: false, heavy: true, ammo: 1 },
   ]
 }
+
+// Jauge d'énergie partagée des armes lourdes : pas de régén passive, elle ne
+// remonte qu'en ramassant les pickups lâchés par les ennemis « porteurs ».
+const ENERGY_MAX = 100
+const AMMO_DROP = 25 // énergie rendue par pickup (buffer / drone)
 
 // Bombe : distance de jet CONTRÔLABLE par la visée (amplitude du stick / distance
 // du curseur), interpolée entre ces deux bornes. Direction = aimX/aimY.
@@ -154,6 +163,7 @@ const POOL_ENEMIES = 240
 const POOL_SHOTS = 160
 const POOL_BOMBS = 24
 const POOL_ORBS = 240
+const POOL_AMMO = 40
 const POOL_PARTS = 320
 const POOL_TAGS = 16
 const POOL_SPLATS = 60
@@ -199,6 +209,8 @@ interface BombEnt { x: number; y: number; sx: number; sy: number; tx: number; ty
 // Flaque corrosive laissée par une explosion : dégâts/s aux ennemis dedans.
 interface PuddleEnt { x: number; y: number; r: number; dps: number; ttl: number; max: number }
 interface OrbEnt { x: number; y: number; xp: number; vx: number; vy: number; col: string }
+// Pickup d'énergie lâché par les ennemis « porteurs » (buffer / drone).
+interface AmmoEnt { x: number; y: number; vx: number; vy: number; amt: number }
 interface PartEnt { x: number; y: number; vx: number; vy: number; r: number; col: string; life: number; max: number }
 interface SplatBlob { dx: number; dy: number; r: number }
 interface SplatDecal { x: number; y: number; col: string; blobs: SplatBlob[]; nb: number }
@@ -285,6 +297,10 @@ export class GameEngine {
   private puddleCount = 0
   private orbs: OrbEnt[] = []
   private orbCount = 0
+  private ammo: AmmoEnt[] = []
+  private ammoCount = 0
+  // Jauge d'énergie partagée des armes lourdes (remontée uniquement par pickups).
+  private energy = ENERGY_MAX
   private parts: PartEnt[] = []
   private partCount = 0
   private tags: FloatTag[] = []
@@ -303,7 +319,7 @@ export class GameEngine {
   // Scratch réutilisés chaque frame (zéro alloc).
   private mv = { x: 0, y: 0 }
   private steerV = { x: 0, y: 0 }
-  private hudState: HudState = { hpPct: 100, hp: 0, paint: 0, paintPct: 0, nextCost: null, time: '00:00', kills: 0, bossPct: -1 }
+  private hudState: HudState = { hpPct: 100, hp: 0, paint: 0, paintPct: 0, nextCost: null, time: '00:00', kills: 0, bossPct: -1, energyPct: 100 }
 
   // Politique d'effets calculée une fois par frame (lue par drawEnemy).
   private frGlowMode: GlowMode = 'full'
@@ -422,6 +438,9 @@ export class GameEngine {
     for (let i = 0; i < POOL_ORBS; i++) {
       this.orbs.push({ x: 0, y: 0, xp: 0, vx: 0, vy: 0, col: '#fff' })
     }
+    for (let i = 0; i < POOL_AMMO; i++) {
+      this.ammo.push({ x: 0, y: 0, vx: 0, vy: 0, amt: 0 })
+    }
     for (let i = 0; i < POOL_PARTS; i++) {
       this.parts.push({ x: 0, y: 0, vx: 0, vy: 0, r: 1, col: '#fff', life: 0, max: 1 })
     }
@@ -485,6 +504,8 @@ export class GameEngine {
     this.bombCount = 0
     this.puddleCount = 0
     this.orbCount = 0
+    this.ammoCount = 0
+    this.energy = ENERGY_MAX
     this.partCount = 0
     this.tagCount = 0
     this.splatHead = 0
@@ -795,6 +816,14 @@ export class GameEngine {
     if (p.firing) {
       const w = this.weapons.find((x) => x.id === this.activeId)!
       while (w.cd <= 0) {
+        // Armes lourdes : chaque appel de tir consomme la jauge d'énergie.
+        // À sec, on ne tire pas — cd reste prêt (0), pas de rafale de rattrapage
+        // quand l'énergie revient.
+        if (w.heavy && this.energy < w.ammo) {
+          w.cd = 0
+          break
+        }
+        if (w.heavy) this.energy -= w.ammo
         this.fireWeapon(w)
         w.cd += w.rate
       }
@@ -1013,6 +1042,29 @@ export class GameEngine {
       }
     }
 
+    // Pickups d'énergie : même dérive/aimant/ramassage que les orbes, mais ils
+    // rechargent la jauge des armes lourdes (clampée à ENERGY_MAX).
+    for (let i = this.ammoCount - 1; i >= 0; i--) {
+      const a = this.ammo[i]
+      a.x += a.vx * dt
+      a.y += a.vy * dt
+      a.vx *= 0.9
+      a.vy *= 0.9
+      const dx = p.x - a.x
+      const dy = p.y - a.y
+      const d = Math.hypot(dx, dy) || 1
+      if (d < 78) {
+        a.x += (dx / d) * 260 * dt
+        a.y += (dy / d) * 260 * dt
+      }
+      if (d < 16) {
+        this.energy = Math.min(ENERGY_MAX, this.energy + a.amt)
+        this.ammoCount--
+        this.ammo[i] = this.ammo[this.ammoCount]
+        this.ammo[this.ammoCount] = a
+      }
+    }
+
     // Caches de peinture : ramassage au contact (3 max par run — boucle triviale).
     for (let i = 0; i < L.caches.length; i++) {
       const c = L.caches[i]
@@ -1101,6 +1153,7 @@ export class GameEngine {
     h.time = this.fmt(this.time)
     h.kills = this.kills
     h.bossPct = this.bossRef ? Math.max(0, (this.bossRef.hp / this.bossRef.maxHp) * 100) : -1
+    h.energyPct = (this.energy / ENERGY_MAX) * 100
     this.hooks.hud(h)
   }
 
@@ -1149,6 +1202,16 @@ export class GameEngine {
   private killEnemyAt(i: number): void {
     const e = this.enemies[i]
     this.kills++
+    // Porteurs d'énergie : buffer et drone lâchent un pickup qui recharge la
+    // jauge des armes lourdes (même pattern poolé que les orbes).
+    if ((e.type === 'buffer' || e.type === 'drone') && this.ammoCount < POOL_AMMO) {
+      const a = this.ammo[this.ammoCount++]
+      a.x = e.x
+      a.y = e.y
+      a.vx = (Math.random() - 0.5) * 40
+      a.vy = (Math.random() - 0.5) * 40
+      a.amt = AMMO_DROP
+    }
     // Boss : jackpot de peinture + splat signature (explode à 0 dégât = recul
     // + décal permanent + particules), puis l'objet repart dans le pool.
     if (e.type === 'boss') {
@@ -1573,6 +1636,31 @@ export class GameEngine {
       }
     }
 
+    // Pickups d'énergie : même dessin que les orbes mais en amber — ils doivent
+    // se lire comme de l'énergie d'armes, pas comme de la peinture.
+    for (let i = 0; i < this.ammoCount; i++) {
+      const a = this.ammo[i]
+      if (a.x < x0 || a.x > x1 || a.y < y0 || a.y > y1) continue
+      if (this.frFx) {
+        this.glow('#ffaa00', a.x, a.y, 22, 0.75)
+        ctx.fillStyle = '#fff4d6'
+        ctx.beginPath()
+        ctx.arc(a.x, a.y, 3.6, 0, 7)
+        ctx.fill()
+      } else {
+        ctx.globalAlpha = 0.85
+        ctx.fillStyle = '#ffaa00'
+        ctx.beginPath()
+        ctx.arc(a.x, a.y, 5.4, 0, 7)
+        ctx.fill()
+        ctx.globalAlpha = 1
+        ctx.fillStyle = '#fff4d6'
+        ctx.beginPath()
+        ctx.arc(a.x, a.y, 2.6, 0, 7)
+        ctx.fill()
+      }
+    }
+
     // Caches de peinture : sprite baké + halo magenta pulsé (3 max par run,
     // toujours affiché même en profil bas — c'est un objectif, pas du décor).
     for (let i = 0; i < this.level.caches.length; i++) {
@@ -1830,6 +1918,17 @@ export class GameEngine {
     if (glowOn) {
       if (e.type === 'drone') this.glow(sp.glow, e.x, e.y, 34 * e.scale, 0.5)
       else this.glow(sp.glow, e.x, e.y - 4, 30 * e.scale, 0.38)
+    }
+    // Tell « porteur d'énergie » : liseré amber discret sur buffer/drone (un
+    // stroke, pas de composite) — coupé quand le profil coupe déjà les halos.
+    if ((e.type === 'buffer' || e.type === 'drone') && this.frGlowMode !== 'off') {
+      ctx.globalAlpha = 0.45
+      ctx.strokeStyle = '#ffaa00'
+      ctx.lineWidth = 1.5
+      ctx.beginPath()
+      ctx.arc(e.x, e.type === 'drone' ? e.y : e.y - 10, e.size * 0.55, 0, 7)
+      ctx.stroke()
+      ctx.globalAlpha = 1
     }
     drawSprite(ctx, sp, e.x, e.y, sc, e.face)
     if (e.flash > 0) {

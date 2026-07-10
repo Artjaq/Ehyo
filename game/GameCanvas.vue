@@ -43,6 +43,7 @@ const paintEl = ref<HTMLElement | null>(null)
 const nextWrap = ref<HTMLElement | null>(null)
 const nextEl = ref<HTMLElement | null>(null)
 const hpFill = ref<HTMLDivElement | null>(null)
+const energyFill = ref<HTMLDivElement | null>(null)
 const hpText = ref<HTMLSpanElement | null>(null)
 const timeEl = ref<HTMLSpanElement | null>(null)
 const killEl = ref<HTMLElement | null>(null)
@@ -67,6 +68,7 @@ let zoneToastTimer = 0
 // Moteur → DOM : valeurs prêtes à afficher, écrites telles quelles chaque frame.
 function onHud(h: HudState): void {
   if (hpFill.value) hpFill.value.style.width = h.hpPct + '%'
+  if (energyFill.value) energyFill.value.style.width = h.energyPct + '%'
   if (hpText.value) hpText.value.textContent = String(h.hp)
   if (paintFill.value) paintFill.value.style.width = h.paintPct + '%'
   if (paintEl.value) paintEl.value.textContent = String(h.paint)
@@ -193,6 +195,11 @@ onBeforeUnmount(() => {
         </div>
         <div class="ngs-hpbar">
           <div ref="hpFill" class="ngs-hpfill"></div>
+        </div>
+        <!-- Jauge d'énergie des armes lourdes (remplie en DOM direct, jamais réactive) -->
+        <div class="ngs-energylabel">ENERGY</div>
+        <div class="ngs-energybar">
+          <div ref="energyFill" class="ngs-energyfill"></div>
         </div>
       </div>
     </div>
@@ -374,6 +381,29 @@ onBeforeUnmount(() => {
   width: 100%;
   background: linear-gradient(90deg, #ff004c, #ffaa00);
   box-shadow: 0 0 12px rgba(255, 0, 76, 0.6);
+  transition: width 0.1s linear;
+}
+
+/* --- jauge d'énergie des armes lourdes (amber) --- */
+.ngs-energylabel {
+  font-family: 'Press Start 2P', monospace;
+  font-size: 7px;
+  letter-spacing: 1px;
+  color: #b9c0c8;
+  margin: 6px 0 3px;
+}
+.ngs-energybar {
+  height: 9px;
+  border: 2px solid #0e141c;
+  background: #060b12;
+  box-shadow: 0 0 0 2px #000;
+  overflow: hidden;
+}
+.ngs-energyfill {
+  height: 100%;
+  width: 100%;
+  background: #ffaa00;
+  box-shadow: 0 0 10px rgba(255, 170, 0, 0.55);
   transition: width 0.1s linear;
 }
 

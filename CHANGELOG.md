@@ -6,6 +6,35 @@ entrée existante.
 
 ---
 
+## 2026-07-10 — branche `feat/energy-gauge`
+
+**Résumé** : jauge d'énergie partagée (`ENERGY_MAX = 100`, pas de régén passive)
+consommée par les armes lourdes à chaque tir (marker 3, bombe 20, aero 1 — spray
+jamais), rechargée uniquement par des pickups amber (+25) lâchés par les ennemis
+« porteurs » (buffer, drone). À sec, l'arme lourde ne tire plus (cd clampé à 0 :
+pas de rafale de rattrapage au refill) ; le spray reste toujours disponible.
+
+**Fichiers modifiés**
+- `game/engine/engine.ts` — `WeaponDef.heavy/ammo`, `energy` + reset, garde dans la
+  boucle de tir, `AmmoEnt` poolé (`POOL_AMMO = 40`, pré-alloc/reset/swap-remove),
+  drop dans `killEnemyAt` (buffer/drone), passe de collecte après les orbes (dérive/
+  aimant/ramassage, clamp `ENERGY_MAX`), rendu pickups amber, liseré amber « porteur »
+  dans `drawEnemy` (coupé si halos off), `HudState.energyPct`
+- `game/GameCanvas.vue` — barre ENERGY amber sous la barre HP (ref `energyFill`,
+  DOM direct dans `onHud`)
+
+**Comment tester** : `npm run build` puis `/game` — au MARKER maintenu, la jauge fond
+(3/tir) puis le tir s'arrête à sec (le spray continue de tirer) ; tuer un buffer/drone
+(cerclés d'amber) lâche un pickup ambre aimanté → +25. Vérifié headless : 100 → 33 tirs
+→ reste 1 → 0 tir à sec, spray OK à sec, drop → 26, clamp 90+25 → 100, barre DOM synchro.
+
+**Comment annuler** : `git checkout c56871e -- game/engine/engine.ts game/GameCanvas.vue`
+
+**TODO / limitations** : équilibrage volontairement non traité (coûts/drops/quantités
+à ressentir en jeu) ; pas d'indicateur « à sec » sur les slots d'armes (piste UI).
+
+---
+
 ## 2026-07-10 — branche `feat/weapons-rework`
 
 **Résumé** : refonte des armes 2 et 3 pour leur donner un vrai rôle. Slot 2 : FAT CAP
