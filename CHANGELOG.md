@@ -6,6 +6,39 @@ entrée existante.
 
 ---
 
+## 2026-07-10 — branche `feat/weapons-rework`
+
+**Résumé** : refonte des armes 2 et 3 pour leur donner un vrai rôle. Slot 2 : FAT CAP
+(éventail) → **MARKER**, trait perçant rapide (dmg 8, cadence 0.30 s) qui traverse
+jusqu'à 4 ennemis alignés (`pierce`, anti double-frappe via `lastHit`). Slot 3 : la
+PAINT BOMB perd sa distance FIXE — le jet est **contrôlé par la visée** (`p.aimReach`
+0..1 : amplitude du stick / distance du curseur, bornes 130..520 ; à la souris la bombe
+tombe sous le curseur) et l'explosion dépose une **flaque corrosive** (r 70, 22 dégâts/s,
+3.5 s — pool 10, passe dédiée lisant le hash spatial, placée avec les bombes).
+
+**Fichiers modifiés**
+- `game/engine/engine.ts` — `WeaponKind`/`makeWeapons` (marker), `ShotEnt.pierce/lastHit`,
+  `PuddleEnt` + pool, `resolveAim` (aimReach), `fireWeapon` (marker + throwDist), passe
+  flaques dans `update()` (post-hash), flaque dans `explode()` (si dmg > 0 : pas sur le
+  splat de mort du boss), rendus marker (trait) + flaque (disque + liseré pulsé coupé en
+  perf bas), `debugInfo.puddles/aimReach`
+- `CLAUDE.md` — table d'armes + section Bombes à jour
+
+**Comment tester** : `npm run build` puis `/game` — débloquer le MARKER (28 paint,
+touche 2) : le trait ambre traverse une file d'ennemis (4 max). Bombe (touche 3) :
+curseur proche = jet court, loin = long (clamp 130/520) ; au stick, l'amplitude module.
+La flaque magenta blesse ~22/s pendant 3.5 s. Vérifié headless : pierce [8,8,8,8,0],
+jets souris 150/400/520/130, stick 325/520, DoT 22/s, expiration, témoin hors zone
+intact, rendu perf bas OK, 0 erreur console.
+
+**Comment annuler** : `git checkout 8b8f04b -- game/engine/engine.ts CLAUDE.md`
+
+**TODO / limitations** : valeurs de départ à ressentir en jeu (dmg/cadence marker,
+dps/ttl flaque, bornes de jet). Le `lastHit` ne mémorise qu'un ennemi : en tas très
+dense, un aller-retour A-B-A peut re-toucher A (rare, borné par le budget pierce).
+
+---
+
 ## 2026-07-10 — branche `feat/minimap`
 
 **Résumé** : minimap en coin haut-droit du canvas — layout du monde baké dans un

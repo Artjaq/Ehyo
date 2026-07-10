@@ -98,7 +98,7 @@ export interface EngineOptions {
 // ---------------------------------------------------------------------------
 // Armes : débloquées par paliers de peinture cumulée, switch manuel 1-4.
 // ---------------------------------------------------------------------------
-type WeaponKind = 'spray' | 'fan' | 'bomb' | 'aero'
+type WeaponKind = 'spray' | 'marker' | 'bomb' | 'aero'
 
 interface WeaponDef {
   id: WeaponKind
@@ -116,8 +116,8 @@ function makeWeapons(): WeaponDef[] {
   return [
     // Tir direct rapide : l'arme de base, précise à moyenne portée.
     { id: 'spray', slot: 1, name: 'SPRAY CAN', tag: 'S', color: '#00eaff', cost: 0, rate: 0.16, cd: 0, unlocked: true },
-    // Éventail : 5 gouttes en cône, contrôle de foule à courte-moyenne portée.
-    { id: 'fan', slot: 2, name: 'FAT CAP', tag: 'F', color: '#ffaa00', cost: 28, rate: 0.55, cd: 0, unlocked: false },
+    // Marqueur : trait perçant rapide qui traverse plusieurs ennemis alignés.
+    { id: 'marker', slot: 2, name: 'MARKER', tag: 'M', color: '#ffaa00', cost: 28, rate: 0.3, cd: 0, unlocked: false },
     // Bombe lobée : explose en zone à l'impact (le splat signature du proto).
     { id: 'bomb', slot: 3, name: 'PAINT BOMB', tag: 'B', color: '#ff00cc', cost: 80, rate: 0.9, cd: 0, unlocked: false },
     // Jet d'aérosol continu : lance-flamme courte portée, gros DPS risqué.
@@ -125,9 +125,18 @@ function makeWeapons(): WeaponDef[] {
   ]
 }
 
-const BOMB_THROW = 330 // distance de lancer fixe (la direction vient de la visée)
+// Bombe : distance de jet CONTRÔLABLE par la visée (amplitude du stick / distance
+// du curseur), interpolée entre ces deux bornes. Direction = aimX/aimY.
+const BOMB_MIN_THROW = 130
+const BOMB_MAX_THROW = 520
 const BOMB_RADIUS = 80
 const BOMB_DMG = 40
+// Flaque corrosive laissée par l'explosion : zone de déni qui blesse dans le temps.
+const PUDDLE_R = 70
+const PUDDLE_DPS = 22
+const PUDDLE_TTL = 3.5
+// Marker : budget de traversée du trait perçant (nb d'ennemis touchés max).
+const MARKER_PIERCE = 4
 
 // Portes de secteur : paliers de kills qui ouvrent la porte suivante (source
 // unique : this.kills). Moins de portes que de paliers → paliers ignorés.
@@ -148,6 +157,7 @@ const POOL_ORBS = 240
 const POOL_PARTS = 320
 const POOL_TAGS = 16
 const POOL_SPLATS = 60
+const POOL_PUDDLES = 10
 const MAX_SPLAT_BLOBS = 9
 
 // ---------------------------------------------------------------------------
@@ -158,6 +168,7 @@ interface PlayerState {
   hp: number; maxHp: number
   speed: number; face: number
   aimX: number; aimY: number // dernière direction de visée (normalisée)
+  aimReach: number // portée de visée 0..1 (amplitude stick / distance curseur)
   firing: boolean
   paint: number // peinture cumulée = monnaie de progression
   hurt: number // i-frame global : compte à rebours après un coup encaissé
@@ -175,14 +186,18 @@ interface EnemyEnt {
   elite: boolean; scale: number
 }
 
-// Projectile en ligne droite (spray / éventail / aérosol).
+// Projectile en ligne droite (spray / marker / aérosol).
 interface ShotEnt {
   x: number; y: number; vx: number; vy: number
   ttl: number; max: number
   dmg: number; r: number; col: string
-  kind: 'shot' | 'aero'
+  kind: 'shot' | 'aero' | 'marker'
+  pierce: number // budget de traversée (1 = meurt au 1er contact)
+  lastHit: unknown // dernier ennemi touché : évite la double-frappe sur frames consécutives
 }
 interface BombEnt { x: number; y: number; sx: number; sy: number; tx: number; ty: number; prog: number; spd: number; col: string; rot: number }
+// Flaque corrosive laissée par une explosion : dégâts/s aux ennemis dedans.
+interface PuddleEnt { x: number; y: number; r: number; dps: number; ttl: number; max: number }
 interface OrbEnt { x: number; y: number; xp: number; vx: number; vy: number; col: string }
 interface PartEnt { x: number; y: number; vx: number; vy: number; r: number; col: string; life: number; max: number }
 interface SplatBlob { dx: number; dy: number; r: number }
@@ -266,6 +281,8 @@ export class GameEngine {
   private shotCount = 0
   private bombs: BombEnt[] = []
   private bombCount = 0
+  private puddles: PuddleEnt[] = []
+  private puddleCount = 0
   private orbs: OrbEnt[] = []
   private orbCount = 0
   private parts: PartEnt[] = []
@@ -394,10 +411,13 @@ export class GameEngine {
       this.enemies.push({ type: 'dog', spr: 'dog', x: 0, y: 0, hp: 0, maxHp: 0, spd: 0, dmg: 0, size: 0, xp: 0, face: 1, hitT: 0, flash: 0, elite: false, scale: 1 })
     }
     for (let i = 0; i < POOL_SHOTS; i++) {
-      this.shots.push({ x: 0, y: 0, vx: 0, vy: 0, ttl: 0, max: 1, dmg: 0, r: 0, col: '#fff', kind: 'shot' })
+      this.shots.push({ x: 0, y: 0, vx: 0, vy: 0, ttl: 0, max: 1, dmg: 0, r: 0, col: '#fff', kind: 'shot', pierce: 1, lastHit: null })
     }
     for (let i = 0; i < POOL_BOMBS; i++) {
       this.bombs.push({ x: 0, y: 0, sx: 0, sy: 0, tx: 0, ty: 0, prog: 0, spd: 0, col: '#fff', rot: 0 })
+    }
+    for (let i = 0; i < POOL_PUDDLES; i++) {
+      this.puddles.push({ x: 0, y: 0, r: 0, dps: 0, ttl: 0, max: 1 })
     }
     for (let i = 0; i < POOL_ORBS; i++) {
       this.orbs.push({ x: 0, y: 0, xp: 0, vx: 0, vy: 0, col: '#fff' })
@@ -454,7 +474,7 @@ export class GameEngine {
     this.p = {
       x: this.level.spawnX, y: this.level.spawnY,
       hp: 130, maxHp: 130, speed: 158, face: 1,
-      aimX: 1, aimY: 0, firing: false,
+      aimX: 1, aimY: 0, aimReach: 1, firing: false,
       paint: 0,
       hurt: 0, safe: 0,
     }
@@ -463,6 +483,7 @@ export class GameEngine {
     this.enemyCount = 0
     this.shotCount = 0
     this.bombCount = 0
+    this.puddleCount = 0
     this.orbCount = 0
     this.partCount = 0
     this.tagCount = 0
@@ -647,7 +668,10 @@ export class GameEngine {
   }
 
   // Résout la visée : stick droit prioritaire (mobile), sinon souris (desktop).
-  // Met à jour p.aimX/aimY (direction persistante) et retourne l'état du tir.
+  // Met à jour p.aimX/aimY (direction persistante) + p.aimReach (portée 0..1 :
+  // amplitude du stick, ou distance du curseur normalisée sur les bornes de la
+  // bombe — la bombe tombe alors SOUS le curseur tant qu'il est dans les bornes).
+  // Retourne l'état du tir.
   private resolveAim(): boolean {
     const p = this.p
     if (this.aimJoy) {
@@ -657,6 +681,7 @@ export class GameEngine {
       if (d > AIM_TRACK) {
         p.aimX = dx / d
         p.aimY = dy / d
+        p.aimReach = Math.min(1, d / 48) // 48 = débattement max du stick de visée
       }
       return d > AIM_DEADZONE // tir continu au-delà de la zone morte
     }
@@ -670,6 +695,7 @@ export class GameEngine {
       if (d > 4) {
         p.aimX = dx / d
         p.aimY = dy / d
+        p.aimReach = Math.min(1, Math.max(0, (d - BOMB_MIN_THROW) / (BOMB_MAX_THROW - BOMB_MIN_THROW)))
       }
       return this.mouse.down
     }
@@ -890,15 +916,22 @@ export class GameEngine {
           if (cx < 0 || cx >= cols) continue
           for (let j = this.hashHeads[cy * cols + cx]; j !== -1; j = this.hashNext[j]) {
             const e = this.enemies[j]
+            if (e === s.lastHit) continue // pas de double-frappe sur frames consécutives
             const rr = e.size * 0.4 + s.r
             const ddx = e.x - s.x
             const ddy = e.y - 10 - s.y // corps ≈ 10px au-dessus des pieds
             if (ddx * ddx + ddy * ddy < rr * rr) {
               e.hp -= s.dmg
               e.flash = 1
-              this.puff(s.x, s.y, s.col, s.kind === 'aero' ? 1 : 3)
-              this.killShotAt(i)
-              continue outer
+              this.puff(s.x, s.y, s.col, s.kind === 'aero' ? 1 : 2)
+              s.lastHit = e
+              // Budget de traversée : le marker continue à travers les rangs,
+              // les autres tirs (pierce = 1) meurent au premier contact.
+              s.pierce--
+              if (s.pierce <= 0) {
+                this.killShotAt(i)
+                continue outer
+              }
             }
           }
         }
@@ -922,6 +955,38 @@ export class GameEngine {
         b.x += (dx / d) * step
         b.y += (dy / d) * step
         b.prog = 1 - d / (Math.hypot(b.tx - b.sx, b.ty - b.sy) || 1)
+      }
+    }
+
+    // Flaques corrosives : dégâts dans le temps via le hash spatial (placée avec
+    // les bombes : elle lit le hash construit plus haut, ne pas déplacer).
+    for (let i = this.puddleCount - 1; i >= 0; i--) {
+      const pu = this.puddles[i]
+      pu.ttl -= dt
+      if (pu.ttl <= 0) {
+        this.puddleCount--
+        this.puddles[i] = this.puddles[this.puddleCount]
+        this.puddles[this.puddleCount] = pu
+        continue
+      }
+      const reach = pu.r + 40
+      const pc0x = Math.max(0, ((pu.x - reach) / CELL) | 0)
+      const pc1x = Math.min(cols - 1, ((pu.x + reach) / CELL) | 0)
+      const pc0y = Math.max(0, ((pu.y - reach) / CELL) | 0)
+      const pc1y = Math.min(rows - 1, ((pu.y + reach) / CELL) | 0)
+      for (let cy = pc0y; cy <= pc1y; cy++) {
+        for (let cx = pc0x; cx <= pc1x; cx++) {
+          for (let j = this.hashHeads[cy * cols + cx]; j !== -1; j = this.hashNext[j]) {
+            const e = this.enemies[j]
+            const rr = pu.r + e.size * 0.4
+            const ddx = e.x - pu.x
+            const ddy = e.y - pu.y
+            if (ddx * ddx + ddy * ddy < rr * rr) {
+              e.hp -= pu.dps * dt
+              e.flash = Math.max(e.flash, 0.3) // lueur douce : "en train de fondre"
+            }
+          }
+        }
       }
     }
 
@@ -1154,21 +1219,23 @@ export class GameEngine {
 
     switch (w.id) {
       case 'spray':
-        this.spawnShot(mx, my, base, 520, 10, 4, 1.1, '#00eaff', 'shot')
+        this.spawnShot(mx, my, base, 520, 10, 4, 1.1, '#00eaff', 'shot', 1)
         break
-      case 'fan':
-        // 5 gouttes en cône (~28°)
-        for (let i = 0; i < 5; i++) this.spawnShot(mx, my, base + (i - 2) * 0.12, 470, 7, 4, 0.75, '#ffaa00', 'shot')
+      case 'marker':
+        // Trait perçant : rapide, fin, traverse jusqu'à MARKER_PIERCE ennemis alignés.
+        this.spawnShot(mx, my, base, 640, 8, 3, 1.2, '#ffaa00', 'marker', MARKER_PIERCE)
         break
       case 'bomb': {
         if (this.bombCount < POOL_BOMBS) {
+          // Distance de jet contrôlée par la visée (amplitude stick / curseur).
+          const throwDist = BOMB_MIN_THROW + (BOMB_MAX_THROW - BOMB_MIN_THROW) * p.aimReach
           const b = this.bombs[this.bombCount++]
           b.x = mx
           b.y = my
           b.sx = mx
           b.sy = my
-          b.tx = p.x + p.aimX * BOMB_THROW
-          b.ty = p.y + p.aimY * BOMB_THROW
+          b.tx = p.x + p.aimX * throwDist
+          b.ty = p.y + p.aimY * throwDist
           b.prog = 0
           b.spd = 430
           b.col = NEONS[(Math.random() * 4) | 0]
@@ -1181,13 +1248,13 @@ export class GameEngine {
         for (let i = 0; i < 2; i++) {
           const jitter = (Math.random() - 0.5) * 0.3
           const spd = 340 + Math.random() * 120
-          this.spawnShot(mx, my, base + jitter, spd, 4, 3, 0.26 + Math.random() * 0.1, Math.random() < 0.5 ? '#39ff14' : '#8aff5c', 'aero')
+          this.spawnShot(mx, my, base + jitter, spd, 4, 3, 0.26 + Math.random() * 0.1, Math.random() < 0.5 ? '#39ff14' : '#8aff5c', 'aero', 1)
         }
         break
     }
   }
 
-  private spawnShot(x: number, y: number, angle: number, speed: number, dmg: number, r: number, ttl: number, col: string, kind: 'shot' | 'aero'): void {
+  private spawnShot(x: number, y: number, angle: number, speed: number, dmg: number, r: number, ttl: number, col: string, kind: 'shot' | 'aero' | 'marker', pierce: number): void {
     if (this.shotCount >= POOL_SHOTS) return
     const s = this.shots[this.shotCount++]
     s.x = x
@@ -1200,6 +1267,8 @@ export class GameEngine {
     s.r = r
     s.col = col
     s.kind = kind
+    s.pierce = pierce
+    s.lastHit = null
   }
 
   // Petit nuage de gouttelettes à l'impact (borné par le budget du profil).
@@ -1312,6 +1381,18 @@ export class GameEngine {
         }
       }
     }
+    // Flaque corrosive : zone de déni qui blesse dans le temps. Seulement pour
+    // les vraies explosions de bombe (dmg > 0) — pas pour le splat de mort du boss.
+    if (dmg > 0 && this.puddleCount < POOL_PUDDLES) {
+      const pu = this.puddles[this.puddleCount++]
+      pu.x = x
+      pu.y = y
+      pu.r = PUDDLE_R
+      pu.dps = PUDDLE_DPS
+      pu.ttl = PUDDLE_TTL
+      pu.max = PUDDLE_TTL
+    }
+
     // Splat de peinture permanent (ring buffer : recouvre le plus ancien).
     const sp = this.splats[this.splatHead]
     this.splatHead = (this.splatHead + 1) % POOL_SPLATS
@@ -1444,6 +1525,28 @@ export class GameEngine {
       }
       ctx.globalAlpha = 1
     }
+
+    // Flaques corrosives actives : disque magenta + liseré pulsé (liseré coupé
+    // sur profil bas — le disque reste : c'est une info de gameplay, pas un décor).
+    for (let i = 0; i < this.puddleCount; i++) {
+      const pu = this.puddles[i]
+      if (pu.x < x0 - 90 || pu.x > x1 + 90 || pu.y < y0 - 90 || pu.y > y1 + 90) continue
+      const fade = Math.min(1, pu.ttl / 0.6) // fondu sur les 0,6 dernières secondes
+      ctx.fillStyle = '#ff00cc'
+      ctx.globalAlpha = (this.frFx ? 0.15 + 0.04 * Math.sin(this.time * 6) : 0.16) * fade
+      ctx.beginPath()
+      ctx.arc(pu.x, pu.y, pu.r, 0, 7)
+      ctx.fill()
+      if (this.frFx) {
+        ctx.globalAlpha = 0.45 * fade
+        ctx.strokeStyle = '#ff00cc'
+        ctx.lineWidth = 2
+        ctx.beginPath()
+        ctx.arc(pu.x, pu.y, pu.r * (0.96 + 0.04 * Math.sin(this.time * 6)), 0, 7)
+        ctx.stroke()
+      }
+    }
+    ctx.globalAlpha = 1
 
     // Orbes de peinture (halo composite seulement si le profil le permet)
     for (let i = 0; i < this.orbCount; i++) {
@@ -1586,6 +1689,18 @@ export class GameEngine {
     for (let i = 0; i < this.shotCount; i++) {
       const s = this.shots[i]
       if (s.x < x0 || s.x > x1 || s.y < y0 || s.y > y1) continue
+      if (s.kind === 'marker') {
+        // Trait de marqueur : segment fin le long de la vélocité (pas de disque).
+        if (this.frFx) this.glow(s.col, s.x, s.y, 18, 0.5)
+        ctx.globalAlpha = 1
+        ctx.strokeStyle = s.col
+        ctx.lineWidth = 3
+        ctx.beginPath()
+        ctx.moveTo(s.x - s.vx * 0.022, s.y - s.vy * 0.022)
+        ctx.lineTo(s.x + s.vx * 0.012, s.y + s.vy * 0.012)
+        ctx.stroke()
+        continue
+      }
       const a = s.kind === 'aero' ? Math.max(0, s.ttl / s.max) : 1
       if (s.kind === 'shot' && this.frFx) this.glow(s.col, s.x, s.y, 16, 0.5)
       ctx.globalAlpha = a
@@ -1818,6 +1933,7 @@ export class GameEngine {
     gatesOpen: number; gatesTotal: number; gateTier: number
     boss: number | null
     cachesLeft: number
+    puddles: number; aimReach: number
   } {
     return {
       chunks: this.level.chunkNames,
@@ -1842,6 +1958,8 @@ export class GameEngine {
       gateTier: this.gateTier,
       boss: this.bossRef ? Math.round(this.bossRef.hp) : null,
       cachesLeft: this.level.caches.filter((c) => !c.taken).length,
+      puddles: this.puddleCount,
+      aimReach: this.p.aimReach,
     }
   }
 }
