@@ -51,7 +51,7 @@ function createCocoFiberBumpTexture(): THREE.CanvasTexture {
 }
 
 function onPointerMove(e: PointerEvent) {
-  const el = renderer.value?.domElement
+  const el = renderer.instance?.domElement
   if (!el) return
   const { left, top, width, height } = el.getBoundingClientRect()
   // Normalize to -1..1 (nx: left=-1, right=+1 / ny: bottom=-1, top=+1)
@@ -93,7 +93,7 @@ onMounted(() => {
   doormat = new THREE.Mesh(geo, [rubberMat, rubberMat, topMat, rubberMat, rubberMat, rubberMat])
   doormat.rotation.x = BASE_ROT_X
 
-  const el = renderer.value?.domElement
+  const el = renderer.instance?.domElement
   el?.addEventListener('pointermove', onPointerMove)
   el?.addEventListener('pointerleave', onPointerLeave)
 
@@ -101,7 +101,7 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
-  const el = renderer.value?.domElement
+  const el = renderer.instance?.domElement
   el?.removeEventListener('pointermove', onPointerMove)
   el?.removeEventListener('pointerleave', onPointerLeave)
 

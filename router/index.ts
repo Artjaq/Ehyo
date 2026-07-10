@@ -2,7 +2,6 @@ import { createRouter, createWebHistory } from 'vue-router'
 import Intro from '@/views/Intro.vue'
 import HomeMenu from '@/views/HomeMenu.vue'
 import ContactPage from '@/views/ContactPage.vue'
-import ShopPage from '@/views/ShopPage.vue'
 
 const router = createRouter({
   history: createWebHistory(),
@@ -23,9 +22,11 @@ const router = createRouter({
       component: ContactPage
     },
     {
+      // Lazy : ShopPage tire ProductCanvas → Three.js/TresJS (~1 Mo min) ;
+      // le split évite de charger la 3D sur les pages qui ne l'utilisent pas.
       path: '/shop',
       name: 'shop',
-      component: ShopPage
+      component: () => import('@/views/ShopPage.vue')
     },
     {
       path: '/shop/:slug',
@@ -36,6 +37,11 @@ const router = createRouter({
       path: '/about',
       name: 'about',
       component: () => import('@/views/AboutPage.vue')
+    },
+    {
+      path: '/game',
+      name: 'game',
+      component: () => import('@/views/GamePage.vue')
     }
   ]
 })

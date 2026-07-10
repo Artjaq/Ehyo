@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
+import logoUrl from '@/assets/picture/ehyo-blanc.svg'
 
 const router = useRouter()
 
@@ -72,8 +73,17 @@ onMounted(() => {
         </div>
       </div>
 
-      <p class="footer-line mt-6 text-center font-press">
-        © 2025 EYHO —
+      <div class="mt-6 flex justify-center">
+        <img
+          :src="logoUrl"
+          alt="EHYO"
+          class="h-8 sm:h-10 w-auto select-none pointer-events-none opacity-40"
+          :style="{ filter: 'drop-shadow(0 0 8px rgba(0, 234, 255, 0.2))' }"
+        />
+      </div>
+
+      <p class="footer-line mt-3 text-center font-press">
+        © 2025 EHYO —
         <span class="footer-link" style="color: rgba(0,234,255,0.35)">TERMS</span>
         ·
         <span class="footer-link" style="color: rgba(255,0,204,0.35)">PRIVACY</span>

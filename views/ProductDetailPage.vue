@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import GlitchText from '@/components/GlitchText.vue'
 import ProductCanvas from '@/components/ProductCanvas.vue'
 import { getProductBySlug } from '@/data/products'
+import logoUrl from '@/assets/picture/ehyo-blanc.svg'
 
 const route = useRoute()
 const router = useRouter()
@@ -99,6 +100,15 @@ function handleBuy() {
         >
           [ ← BACK TO SHOP ]
         </a>
+      </div>
+
+      <div class="mt-6 flex justify-center">
+        <img
+          :src="logoUrl"
+          alt="EHYO"
+          class="h-8 sm:h-10 w-auto select-none pointer-events-none opacity-40"
+          :style="{ filter: 'drop-shadow(0 0 8px rgba(0, 234, 255, 0.2))' }"
+        />
       </div>
 
     </section>
