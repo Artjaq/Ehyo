@@ -1,185 +1,121 @@
-# SPECS_ENVIRONMENT.md — Enrichissement de l'environnement
+# SPECS_ENVIRONMENT.md — Enrichissement de l'environnement (v2, moteur custom)
 
-Projet : **Neon Graffiti** (street shooter mobile-first, Phaser 3 dans Vue.js)
-Cible : la scène de jeu principale (`GameScene.js` ou équivalent).
+Projet : **NEON GRAFFITI SURVIVOR** (twin-stick survivor mobile-first, moteur Canvas 2D
+custom dans Vue 3 — **aucun Phaser**). Cible : `game/engine/level.ts` + `game/engine/engine.ts`.
 
-## Objectif
+> **Historique** : la v1 de ce document (voir git, commit `d3269ef`) visait Phaser 3,
+> abandonné au pivot de juillet 2026. Le **Scope 1 (décor urbain)** a été implémenté en
+> adaptation : registre data-driven `PROP_DEFS` + sprites `buildProps()` (commit `c339538`)
+> et arène néon garantie (commit `156c237`). Ce document re-spécifie le **Scope 2** pour
+> le moteur custom. Le Scope 1 est clos.
 
-Ajouter deux systèmes complémentaires à l'environnement :
+## Objectif du Scope 2 — l'espace s'ouvre avec les kills
 
-1. **Décor urbain** — tags, panneaux de rue et mobilier urbain posés dans le monde pour l'ambiance graffiti.
-2. **Expansion progressive de la map** — le monde s'agrandit à mesure que le joueur élimine des ennemis, en réutilisant le système de décor pour peupler les nouvelles zones.
+Sensation recherchée (inchangée) : roguelite qui escalade — plus le joueur élimine
+d'ennemis, plus le monde jouable s'agrandit, et les nouvelles zones sont déjà décorées.
 
-## Décisions par défaut (à ajuster si besoin)
+**Décision de design v2 : pas d'expansion réelle → DÉVERROUILLAGE DE SECTEURS.**
+Le monde complet est généré au boot (comme aujourd'hui, avec plus de chunks) ; le chemin
+est découpé en **secteurs** séparés par des **portes** infranchissables et visibles.
+Chaque palier de kills ouvre la porte suivante.
 
-- **Expansion par paliers** : 30 → 60 → 90 → 120 kills (roguelite qui escalade), et pas une seule fois.
-- **Direction** : la map grandit **autour** de la zone de jeu (extension symétrique), pas dans une seule direction.
+Pourquoi : le moteur dimensionne UNE fois par run la grille (`Uint8Array`), le flow field
+(`Int32Array cols×rows`), le hash spatial (`hashHeads`), les `walkCells` et le cache de
+tuiles (`tilesX`). Redimensionner le monde en cours de run imposerait des realloc et une
+invalidation totale du cache (hitch garanti en pleine partie) — contraire aux invariants.
+Le déverrouillage donne la même perception d'expansion pour un coût quasi nul.
 
-Ces deux choix vivent dans `ENV_CONFIG` ci-dessous : changer `expansionThresholds` et `expansionMode` suffit à basculer de comportement.
+## Découpage en secteurs (génération, `level.ts`)
 
-## Conventions (rappel projet)
+- `tryBuild(targetChunks)` passe de 8 à **~14 chunks**. La chaîne placée est découpée en
+  secteurs par ordre de pose : **S0 = cross de départ + arène + 1 chunk** (l'arène reste
+  accessible immédiatement, comme en v1), puis **3-4 chunks par secteur** (≈ 3 portes par
+  run, selon ce que la génération a réussi à poser).
+- **Porte** = le span de cellules du port reliant le dernier chunk d'un secteur au premier
+  du suivant (1 cellule de profondeur × largeur du port). Enregistrée pendant l'assemblage
+  (dans `attach()`, qui connaît le port ouvert au moment du stamp).
+- Encodage grille : nouvelle valeur **`2` = porte fermée** (`0` vide, `1` sol).
+  `cellWalkable()` ne retourne `true` que pour `1` → collisions, flow field, `moveCircle`,
+  `pushOut` et spawns respectent les portes **sans aucun code nouveau**.
+- **Cellules ouvertes** : `Level` maintient `openCells: number[]` = cellules atteignables
+  depuis le spawn portes fermées (BFS au build, réutiliser la mécanique de `computeFlow`).
+  `randomSpawnPoint()` échantillonne `openCells` (et plus `walkCells`) → aucun ennemi ne
+  spawn dans un secteur fermé. À chaque ouverture, BFS incrémental → `openCells` grossit.
+- **Validation de continuité (anti-leak)** : deux chunks posés séparément peuvent se
+  retrouver adjacents sans port (le chemin qui reboucle) → contournement possible d'une
+  porte. Au build, BFS portes fermées : si des cellules d'un secteur N+1 sont déjà
+  atteignables, ce secteur est **fusionné** dans le précédent (sa porte s'ouvre d'office).
+  Jamais de softlock, comportement toujours défini.
 
-- Commentaires en **français**, noms de variables/fonctions en **anglais**.
-- Code **production-ready**, pas de placeholder laissé en l'état.
-- Phaser 3, respect du cycle `preload()` / `create()` / `update()`.
-- Prompts scopés : implémenter Scope 1 **puis** Scope 2, pas les deux d'un bloc si un doute subsiste.
+## Ouverture (runtime, `engine.ts` + `level.ts`)
 
-## CONFIG partagée (constantes en haut de scène)
+- **Source unique du compteur** : `this.kills`, déjà incrémenté au seul endroit
+  `killEnemyAt()`. Le moteur compare `kills` au palier courant dans `update()` (une
+  comparaison par frame, zéro alloc) et appelle `level.openNextGate()`.
+- `openNextGate()` : cellules `2 → 1`, ajout au `openCells` (BFS incrémental), **éviction
+  ciblée** des tuiles touchées (`tileCache.delete` des clés de la porte — PAS
+  `invalidateStatic()`, qui re-bakerait tout le monde), retourne la position de la porte
+  (pour le feedback) ou `null` s'il n'y a plus de porte.
+- **Paliers** : constante `GATE_KILLS = [30, 75, 130]` en tête d'`engine.ts`, à côté des
+  autres constantes gameplay (`BOMB_*`, `HIT_IFRAME`…). S'il y a moins de portes que de
+  paliers (génération courte, fusion anti-leak), les paliers excédentaires sont ignorés.
 
-```js
-const ENV_CONFIG = {
-  // --- Décor ---
-  decorDensity: 0.00008,      // décos par pixel² de zone à peupler
-  clearRadius: 80,            // rayon mini (px) à préserver autour des points sensibles
-  placementRetries: 12,       // essais avant d'abandonner un placement
-  scaleRange: [0.7, 1.15],    // variation d'échelle aléatoire
-  tintChance: 0.35,           // proba d'appliquer une teinte néon à un tag
+## Visuel & feedback (charte)
 
-  // --- Expansion ---
-  worldStart:   { width: 1600, height: 1200 }, // taille initiale du monde
-  expansionThresholds: [30, 60, 90, 120],      // paliers de kills
-  expansionMode: 'around',                     // 'around' | 'right' | 'up' | 'down' | 'left'
-  expansionStep: { width: 800, height: 800 },  // agrandissement par palier
-};
-```
+- **Porte fermée** (bakée dans `renderTile`, zéro coût par frame) : sol de rue normal +
+  barricade néon en travers — bandes obliques rouge glitch `#ff004c` / noir (danger,
+  cohérent charte), liseré supérieur cyan, texte pixel « CLOSED » (Press Start 2P, comme
+  les enseignes). Doit se lire comme un mur temporaire, pas un bug de décor.
+- **À l'ouverture** (uniquement via les systèmes existants — pas de nouveau hook Vue) :
+  - screen shake court (`this.shake`),
+  - burst de particules cyan à la porte (pool existant, borné par le budget du profil),
+  - mot flottant « OPEN! » à la porte + « ZONE OUVERTE » au-dessus du joueur
+    (pool `FloatTag` existant),
+  - **cap visuel** : pendant ~4 s, 3 points pointillés (même style que l'indicateur de
+    visée) orientés du joueur vers la porte ouverte — un seul état `{x, y, ttl}` réutilisé,
+    zéro alloc.
+- Un toast Vue (hook dédié type `unlock`) est **optionnel v2.1**, pas requis.
 
----
+## Ce qui ne change PAS
 
-## Scope 1 — Système de décor (tags & mobilier urbain)
-
-### Comportement attendu
-
-- Le décor est **data-driven** : une liste de définitions, pas des `add.image()` codés en dur.
-- Chaque zone rectangulaire à peupler reçoit un nombre de décos calculé depuis `decorDensity × aire`.
-- Variation aléatoire par instance : échelle (`scaleRange`), rotation, `flipX`, teinte optionnelle (`tint`) pour les tags.
-- Les placements évitent les **points sensibles** (spawn joueur, spawns ennemis, décos déjà posées) via `clearRadius` + `placementRetries`.
-
-### Structure de données
-
-Un registre de définitions, chacune décrivant un type de déco :
-
-```js
-// category : 'tag' (au sol) | 'prop' (mobilier, potentiellement bloquant)
-// collidable : true => corps physique statique + collision joueur/ennemis
-{ key: 'tag_arrow',   category: 'tag',  collidable: false, tintable: true  },
-{ key: 'sign_stop',   category: 'prop', collidable: true,  tintable: false },
-{ key: 'dumpster',    category: 'prop', collidable: true,  tintable: false },
-{ key: 'tag_throwup', category: 'tag',  collidable: false, tintable: true  },
-// ...
-```
-
-### Fonction à implémenter
-
-```js
-/**
- * Peuple une zone rectangulaire avec des décos aléatoires.
- * @param {Phaser.Geom.Rectangle} area - zone à peupler (coords monde)
- * @param {Array}  keepClearPoints    - points à préserver [{x, y}, ...]
- * @returns {Array} liste des décos créées (pour cumul entre appels)
- */
-placeDecorations(area, keepClearPoints) { ... }
-```
-
-Responsabilités : calcul du nombre de décos, tirage d'une définition, position candidate + rejet si trop proche d'un point sensible, application des variations, ajout au bon groupe (voir ci-dessous).
-
-### Profondeur & collisions — **le point à ne pas rater**
-
-- **Tags (`category: 'tag'`)** : `setDepth(DEPTH.GROUND)` — toujours en fond, sous joueur/ennemis. Pas de physique.
-- **Props (`category: 'prop'`)** : profondeur triée par `y` (`setDepth(sprite.y)`) pour un rendu 2.5D correct (le joueur passe devant/derrière). Si `collidable`, l'ajouter à un `staticGroup` et poser la collision.
-- Définir des constantes de couches : `const DEPTH = { BACKGROUND: 0, GROUND: 1, ENTITIES: 'sortByY' };`
-- Un seul `staticGroup` pour tous les props bloquants, avec `this.physics.add.collider(player, propsGroup)` et `collider(enemies, propsGroup)`.
-
-### Assets attendus
-
-Textures chargées en `preload()` (fournir des placeholders si absents, à ne pas laisser en prod) :
-`tag_arrow`, `tag_throwup`, `sign_stop`, `sign_oneway`, `dumpster`, `barrier`, `traffic_cone`, `fire_hydrant`.
-
----
-
-## Scope 2 — Expansion progressive de la map
-
-### Comportement attendu
-
-Au franchissement d'un palier de `expansionThresholds`, le monde s'agrandit de `expansionStep` selon `expansionMode`, la nouvelle zone est peuplée (via Scope 1) et un feedback est joué.
-
-### Compteur de kills — source unique
-
-Éviter les doubles comptes : **un seul point d'incrément**. À la mort d'un ennemi, émettre un event ; la scène écoute et gère le palier.
-
-```js
-// dans le handler de mort d'ennemi (un seul endroit) :
-this.events.emit('enemy-killed', enemy);
-
-// dans create() :
-this.killCount = 0;
-this.currentTier = 0;
-this.events.on('enemy-killed', this.handleEnemyKilled, this);
-
-handleEnemyKilled() {
-  this.killCount++;
-  const next = ENV_CONFIG.expansionThresholds[this.currentTier];
-  if (next !== undefined && this.killCount >= next) {
-    this.currentTier++;
-    this.expandMap();
-  }
-}
-```
-
-> Pour une escalade infinie, remplacer le tableau par une formule (`next = base * (tier + 1)`). Le tableau est gardé par défaut pour la lisibilité.
-
-### Fonction à implémenter
-
-```js
-/** Agrandit le monde d'un palier et peuple la nouvelle zone. */
-expandMap() { ... }
-```
-
-Responsabilités :
-
-1. Calculer les nouvelles bornes selon `expansionMode` (`'around'` = étendre des deux côtés sur chaque axe).
-2. `this.physics.world.setBounds(...)` **et** `this.cameras.main.setBounds(...)` avec les mêmes valeurs.
-3. Redimensionner le fond (voir ci-dessous).
-4. Déterminer la (les) zone(s) nouvellement révélée(s) sous forme de `Rectangle`, puis appeler `placeDecorations()` dessus en passant les points sensibles courants.
-5. (Optionnel) ajouter des points de spawn ennemis dans la nouvelle zone et monter légèrement la difficulté.
-6. Jouer le feedback.
-
-### Fond (background)
-
-- Utiliser un **`TileSprite`** couvrant tout le monde, `setScrollFactor(1)`, `setDepth(DEPTH.BACKGROUND)`.
-- À l'expansion : ajuster `bg.width` / `bg.height` et repositionner l'origine pour couvrir les nouvelles bornes. Le TileSprite re-tile automatiquement, pas besoin de recréer la texture.
-- Si un vrai level design est souhaité plus tard, migrer sur une tilemap — hors scope ici.
-
-### Feedback (au moment de l'expansion)
-
-- Léger flash caméra (`this.cameras.main.flash(...)`) ou shake court.
-- Texte temporaire centré « ZONE ÉTENDUE » qui fade out.
-- Son dédié si disponible.
-
-### Synergie avec Scope 1
-
-L'expansion **ne réimplémente rien** : elle appelle `placeDecorations(newArea, keepClearPoints)`. Implémenter Scope 1 en premier rend Scope 2 presque trivial.
-
----
+- Ordre des passes de `update()`, pooling, hash spatial : intacts.
+- La courbe de spawn reste temporelle (pas de difficulté par secteur — hors scope).
+- Les drones volants ignorent déjà les murs : ils pourront survoler une porte fermée.
+  **Accepté** (thématique) et borné : ils ne *spawnent* que dans l'anneau autour du
+  joueur, clampé au monde.
+- Décor : les secteurs fermés sont décorés dès le build (Scope 1 tourne sur le monde
+  entier) — rien à repeupler à l'ouverture, contrairement à la spec v1.
+- Tuning perf : rien de nouveau dans `quality.ts` (les portes sont du décor baké).
 
 ## Pièges à éviter
 
-- **World bounds ≠ camera bounds** : les deux doivent être mis à jour ensemble, sinon la caméra bloque le joueur dans l'ancienne zone (ou l'inverse).
-- **Double comptage des kills** : n'incrémenter que depuis l'event `enemy-killed`, jamais dans plusieurs handlers.
-- **Depth des props** : sans tri par `y`, le joueur apparaît sous un panneau qu'il devrait masquer.
-- **Décos sur les spawns** : toujours passer les points sensibles à `placeDecorations`, sinon un ennemi peut apparaître dans une benne.
-- **Fuite mémoire** : garder les décos dans des groupes clairs ; si la scène se relance, nettoyer (`destroy`) proprement.
+- **Aucun realloc en run** : `grid`, `flow`, `hashHeads`, pools — dimensionnés au build
+  sur le monde COMPLET (portes comprises). L'ouverture ne fait que muter des valeurs.
+- **Éviction ciblée du cache de tuiles**, jamais `invalidateStatic()` à l'ouverture.
+- **`openCells` vs `walkCells`** : les spawns ennemis doivent utiliser `openCells`, sinon
+  des ennemis apparaissent coincés derrière les portes (flow field à -1 → figés au mur).
+- **Le flow field se recalcule tout seul** (cadence 0.35 s) : ne pas forcer de recalcul
+  synchrone à l'ouverture.
+- **Anti-leak par BFS** au build (fusion de secteur), sinon une adjacence fortuite entre
+  chunks rend une porte contournable et les paliers incohérents.
 
 ## Definition of done
 
-- [ ] `placeDecorations()` peuple une zone avec variation et respect des `keepClearPoints`.
-- [ ] Tags en fond, props triés par `y`, props bloquants en collision.
-- [ ] `killCount` incrémenté depuis une source unique, paliers respectés.
-- [ ] `expandMap()` met à jour world **et** camera bounds, redimensionne le fond, peuple la nouvelle zone via Scope 1.
-- [ ] Feedback visuel + (optionnel) sonore au franchissement d'un palier.
-- [ ] Changer `expansionThresholds` / `expansionMode` modifie le comportement sans toucher au reste du code.
+- [ ] Monde ~14 chunks découpé en secteurs derrière des portes fermées ; toutes les
+      structures allouées une fois au build (zéro realloc en run).
+- [ ] Portes visibles (barricade bakée), infranchissables joueur ET ennemis au sol ;
+      spawns ennemis limités aux secteurs ouverts.
+- [ ] Paliers `GATE_KILLS` déclenchés depuis la source unique `kills` ; changer le tableau
+      suffit à changer le rythme.
+- [ ] Ouverture : porte → sol, éviction ciblée des tuiles, `openCells` à jour, feedback
+      complet (shake + particules + tags + cap visuel) sans nouveau hook Vue.
+- [ ] Cas dégénérés sûrs : moins de portes que de paliers, secteur fusionné (anti-leak),
+      génération courte (filet de sécurité existant) — jamais de softlock.
+- [ ] `npm run build` vert ; fluide desktop, jouable mobile (`?quality=mobile`).
 
-## Hors scope
+## Hors scope (v2.1+)
 
-- Tilemap / level design manuel (le fond reste un TileSprite procédural).
-- Nouveaux types d'ennemis (seulement, en option, plus de spawns).
-- Assets définitifs (placeholders acceptés le temps du dev, à remplacer avant prod).
+- Toast Vue à l'ouverture (nouveau hook moteur→composant typé).
+- Difficulté par secteur, nouveaux ennemis, boss d'arène.
+- Minimap / boussole permanente.
+- Récompense de zone (cache de peinture dans le secteur ouvert) — bonne idée, plus tard.

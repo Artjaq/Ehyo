@@ -6,6 +6,26 @@ entrée existante.
 
 ---
 
+## 2026-07-10 — branche `game`
+
+**Résumé** : réécriture de `SPECS_ENVIRONMENT.md` (v2) pour le moteur custom — le Scope 2
+« expansion de map » (resize de world bounds Phaser, impossible ici sans realloc) devient
+un **déverrouillage de secteurs** : monde complet généré au boot (~14 chunks), portes
+bakées ouvertes aux paliers de kills. Spec seulement, aucune implémentation.
+
+**Fichiers modifiés**
+- `SPECS_ENVIRONMENT.md` — v2 complète (secteurs, portes grille=2, openCells,
+  anti-leak BFS, éviction ciblée du cache de tuiles, feedback in-canvas, DoD)
+
+**Comment tester** : n/a (documentation) — relire la spec avant d'implémenter.
+
+**Comment annuler** : `git checkout 156c237 -- SPECS_ENVIRONMENT.md`
+
+**TODO / limitations** : implémentation à faire après validation de la spec ;
+toast Vue et récompenses de zone repoussés en v2.1.
+
+---
+
 ## 2026-07-10 — branche `feat/arene-neon`
 
 **Résumé** : arène néon v1 — salle spéciale autorée (octogone 12×12 cellules, 1920 px),
