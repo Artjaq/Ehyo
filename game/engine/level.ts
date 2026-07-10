@@ -373,6 +373,9 @@ export interface ArenaRect { x0: number; y0: number; x1: number; y1: number }
 // Porte de secteur finalisée : indices de cellules (grille = 2 tant que fermée),
 // centre en px monde (feedback), état. Ouvertes dans l'ordre du tableau.
 export interface Gate { cells: number[]; x: number; y: number; open: boolean }
+// Récompense de zone : cache de peinture posé en profondeur du secteur
+// fraîchement ouvert. Ramassage au contact géré par le moteur (taken = true).
+export interface Cache { x: number; y: number; paint: number; taken: boolean }
 export interface Obstacle { x: number; y: number; r: number }
 export interface Pillar { x: number; y: number }
 export interface Bench { x: number; y: number }
@@ -441,6 +444,7 @@ export class Level {
   arena: ArenaRect | null = null // emprise de l'arène néon (chunk garanti)
   arenaLogo: FloorLogo | null = null // logo EHYO géant au centre de l'arène
   gates: Gate[] = [] // portes de secteur, dans l'ordre d'ouverture
+  caches: Cache[] = [] // récompenses de zone (1 par porte ouverte en jeu)
   wallLogos: WallLogo[] = []
   chunkNames: string[] = [] // pour debug/inspection
 
@@ -545,7 +549,7 @@ export class Level {
           break
         }
       }
-      if (!blocks) this.openGate(g)
+      if (!blocks) this.openGate(g, false)
     }
 
     this.generateDecor()
@@ -581,9 +585,12 @@ export class Level {
 
   // Ouvre une porte : cellules → sol, atteignabilité étendue, éviction CIBLÉE
   // des tuiles couvrant la porte (jamais invalidateStatic : re-bake local only).
-  private openGate(g: Gate): void {
+  // withCache : pose une récompense de zone en profondeur du nouveau secteur
+  // (portes ouvertes EN JEU uniquement — pas les fusions anti-leak du build).
+  private openGate(g: Gate, withCache: boolean): Cache | null {
     g.open = true
     for (const ci of g.cells) this.grid[ci] = 1
+    const before = this.openCells.length
     this.floodOpen(...g.cells)
     for (const ci of g.cells) {
       const cx = ci % this.cols
@@ -596,14 +603,36 @@ export class Level {
         for (let tx = t0x; tx <= t1x; tx++) this.tileCache.delete(ty * this.tilesX + tx)
       }
     }
+    // Récompense de zone : le BFS ajoute les cellules par distance croissante →
+    // la queue du segment = le fond du secteur. On y tire une cellule dégagée.
+    if (!withCache) return null
+    const seg = this.openCells.length - before
+    for (let t = 0; t < 8 && seg > 0; t++) {
+      const depth = Math.max(1, (seg * 0.3) | 0)
+      const idx = this.openCells[before + seg - 1 - ((Math.random() * depth) | 0)]
+      const c = this.cellCenter(idx)
+      let clear = true
+      for (const o of this.obstacles) {
+        if (Math.hypot(o.x - c.x, o.y - c.y) < 80) {
+          clear = false
+          break
+        }
+      }
+      if (!clear) continue
+      const cache: Cache = { x: c.x, y: c.y, paint: 30 + this.caches.length * 15, taken: false }
+      this.caches.push(cache)
+      return cache
+    }
+    return null
   }
 
-  // Ouvre la prochaine porte fermée. Retourne son centre (feedback) ou null.
-  openNextGate(): { x: number; y: number } | null {
+  // Ouvre la prochaine porte fermée. Retourne son centre + présence d'une
+  // récompense (feedback moteur/toast), ou null s'il n'y a plus de porte.
+  openNextGate(): { x: number; y: number; cache: boolean } | null {
     for (const g of this.gates) {
       if (!g.open) {
-        this.openGate(g)
-        return { x: g.x, y: g.y }
+        const cache = this.openGate(g, true)
+        return { x: g.x, y: g.y, cache: cache !== null }
       }
     }
     return null

@@ -6,6 +6,38 @@ entrée existante.
 
 ---
 
+## 2026-07-10 — branche `feat/cache-zone`
+
+**Résumé** : récompense de zone — à chaque porte ouverte en jeu, un PAINT CACHE
+(palette de bombes néon, halo magenta pulsé) est posé **au fond du nouveau secteur**
+(queue du BFS d'atteignabilité = cellules les plus profondes). Ramassage au contact :
++30/+45/+60 peinture selon le secteur. Le toast de zone affiche « PAINT CACHE AHEAD ».
+
+**Fichiers modifiés**
+- `game/engine/level.ts` — type `Cache`, tableau `Level.caches`, placement dans
+  `openGate(g, withCache)` (cellule profonde dégagée des obstacles, 8 tentatives ;
+  pas de cache pour les fusions anti-leak du build), retour enrichi d'`openNextGate`
+- `game/engine/engine.ts` — `ZoneInfo.cache`, passe de ramassage au contact (3 max,
+  zéro alloc), rendu sprite + halo pulsé (affiché même en profil bas : c'est un
+  objectif), `debugInfo.cachesLeft`
+- `game/engine/sprites.ts` — sprite `cache` dans `buildProps` (palette + 3 bombes néon)
+- `game/GameCanvas.vue` — toast : « PAINT CACHE AHEAD » quand un cache existe
+- `CLAUDE.md`, `SPECS_ENVIRONMENT.md` — état à jour (récompense + boss marqués faits)
+
+**Comment tester** : `npm run build` puis `/game`, 30 kills (`__ngs.kills = 30`) →
+toast « PAINT CACHE AHEAD », explorer le secteur ouvert jusqu'au cache lumineux,
+marcher dessus → « +30 PAINT ». Vérifié headless : cache sur sol jouable au fond du
+secteur, ramassage 0→30 peinture, `cachesLeft` correct, cohabitation des toasts
+arme+zone sans chevauchement.
+
+**Comment annuler** : `git checkout bc6c6d0 -- game/ CLAUDE.md SPECS_ENVIRONMENT.md`
+
+**TODO / limitations** : pas de cache si la porte est fusionnée au build (anti-leak,
+voulu) ou si aucune cellule dégagée en 8 tirages (rare) — le toast dit alors
+« FOLLOW THE DOTS ». Montants 30/45/60 à ajuster au ressenti.
+
+---
+
 ## 2026-07-10 — branche `game`
 
 **Résumé** : équilibrage — début de partie adouci : intervalle de spawn initial 1.75 s

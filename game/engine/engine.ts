@@ -64,6 +64,7 @@ export interface UnlockInfo {
 export interface ZoneInfo {
   opened: number // secteurs accessibles après l'ouverture
   total: number // secteurs du niveau (portes + 1)
+  cache: boolean // une récompense de zone attend dans le nouveau secteur
 }
 
 export interface GameOverStats {
@@ -947,6 +948,20 @@ export class GameEngine {
       }
     }
 
+    // Caches de peinture : ramassage au contact (3 max par run — boucle triviale).
+    for (let i = 0; i < L.caches.length; i++) {
+      const c = L.caches[i]
+      if (c.taken) continue
+      const cdx = p.x - c.x
+      const cdy = p.y - c.y
+      if (cdx * cdx + cdy * cdy < 32 * 32) {
+        c.taken = true
+        this.puff(c.x, c.y - 8, '#ff00cc', 12)
+        this.spawnWord(c.x, c.y - 34, '+' + c.paint + ' PAINT', '#00eaff', 1.5)
+        this.gainPaint(c.paint)
+      }
+    }
+
     // Particules
     for (let i = this.partCount - 1; i >= 0; i--) {
       const q = this.parts[i]
@@ -990,6 +1005,7 @@ export class GameEngine {
         this.hooks.zone({
           opened: this.level.gates.filter((gg) => gg.open).length + 1,
           total: this.level.gates.length + 1,
+          cache: g.cache,
         })
       } else {
         this.gateTier = GATE_KILLS.length // plus de porte : on ne reteste plus
@@ -1454,6 +1470,16 @@ export class GameEngine {
       }
     }
 
+    // Caches de peinture : sprite baké + halo magenta pulsé (3 max par run,
+    // toujours affiché même en profil bas — c'est un objectif, pas du décor).
+    for (let i = 0; i < this.level.caches.length; i++) {
+      const c = this.level.caches[i]
+      if (c.taken) continue
+      if (c.x < x0 || c.x > x1 || c.y < y0 || c.y > y1) continue
+      this.glow('#ff00cc', c.x, c.y - 12, 44, 0.38 + 0.18 * Math.sin(this.time * 3.2))
+      drawSprite(ctx, this.propSpr.cache, c.x, c.y, 3.5, 1)
+    }
+
     // Tri en profondeur : créneaux persistants, entités cullées à l'insertion.
     const slots = this.sortSlots
     let n = 0
@@ -1745,6 +1771,7 @@ export class GameEngine {
     profile: string; perfLevel: number; frameMs: number; dpr: number; parts: number
     gatesOpen: number; gatesTotal: number; gateTier: number
     boss: number | null
+    cachesLeft: number
   } {
     return {
       chunks: this.level.chunkNames,
@@ -1768,6 +1795,7 @@ export class GameEngine {
       gatesTotal: this.level.gates.length,
       gateTier: this.gateTier,
       boss: this.bossRef ? Math.round(this.bossRef.hp) : null,
+      cachesLeft: this.level.caches.filter((c) => !c.taken).length,
     }
   }
 }

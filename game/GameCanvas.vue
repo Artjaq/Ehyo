@@ -211,7 +211,7 @@ onBeforeUnmount(() => {
          peuvent tomber en même temps, ex. déblocage au même palier de peinture) -->
     <div v-if="zoneToast" class="ngs-toast ngs-toast-zone">
       ZONE OPEN <b>{{ zoneToast.opened }}/{{ zoneToast.total }}</b>
-      <span class="ngs-toastkey">FOLLOW THE DOTS</span>
+      <span class="ngs-toastkey">{{ zoneToast.cache ? 'PAINT CACHE AHEAD' : 'FOLLOW THE DOTS' }}</span>
     </div>
 
     <!-- Joysticks virtuels : gauche = déplacement, droite = visée/tir -->

@@ -148,6 +148,17 @@ export function buildProps(): Record<string, BakedSprite> {
       pal: { w: '#e9edf2', k: '#101214', s: '#8f959c' },
       r: [[0, 1, 12, 5, 'w'], [2, 3, 6, 1, 'k'], [7, 2, 2, 1, 'k'], [8, 3, 2, 1, 'k'], [7, 4, 2, 1, 'k'], [5, 6, 1, 8, 's'], [4, 14, 3, 1, 'k']],
     },
+    // Cache de peinture : récompense de zone — palette de bombes néon
+    cache: {
+      w: 14, h: 10, anchor: 'foot', glow: '#ff00cc',
+      pal: { w: '#5b4626', k: '#101218', c: '#00eaff', m: '#ff00cc', g: '#39ff14', s: '#e9edf2' },
+      r: [
+        [0, 8, 14, 2, 'w'], [0, 8, 14, 1, 'k'], // palette
+        [2, 2, 3, 6, 'c'], [2, 1, 3, 1, 's'], // bombe cyan
+        [6, 3, 3, 5, 'm'], [6, 2, 3, 1, 's'], // bombe magenta
+        [10, 2, 3, 6, 'g'], [10, 1, 3, 1, 's'], // bombe verte
+      ],
+    },
   }
   const out: Record<string, BakedSprite> = {}
   for (const key in P) {

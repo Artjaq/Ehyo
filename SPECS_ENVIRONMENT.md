@@ -117,6 +117,9 @@ Le déverrouillage donne la même perception d'expansion pour un coût quasi nul
 
 - ~~Toast Vue à l'ouverture (nouveau hook moteur→composant typé).~~ **Fait en v2.1** :
   hook `zone(info: ZoneInfo)` + toast `.ngs-toast-zone` dans `GameCanvas.vue`.
-- Difficulté par secteur, nouveaux ennemis, boss d'arène.
+- Difficulté par secteur, nouveaux ennemis. ~~Boss d'arène.~~ **Fait** : THE BUFF KING
+  (`BOSS_KILLS = 160`, confiné dans l'arène, slam, barre HP, jackpot à sa mort).
 - Minimap / boussole permanente.
-- Récompense de zone (cache de peinture dans le secteur ouvert) — bonne idée, plus tard.
+- ~~Récompense de zone (cache de peinture dans le secteur ouvert).~~ **Fait** :
+  `Cache` posé au fond du BFS du secteur ouvert (+30/+45/+60 peinture), halo pulsé,
+  ramassage au contact, toast « PAINT CACHE AHEAD » (`ZoneInfo.cache`).
