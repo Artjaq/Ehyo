@@ -6,6 +6,24 @@ entrée existante.
 
 ---
 
+## 2026-07-10 — branche `game`
+
+**Résumé** : équilibrage — début de partie adouci : intervalle de spawn initial 1.75 s
+→ 2.3 s, pente 0.011 → 0.013 (≈ 30-40 % d'ennemis en moins les 2 premières minutes ;
+les courbes se rejoignent vers 2 min 20, plancher 0.45 s inchangé).
+
+**Fichiers modifiés**
+- `game/engine/engine.ts` — courbe d'intervalle de spawn dans `update()`
+
+**Comment tester** : `npm run build` puis `/game` — la première minute doit laisser le
+temps de ramasser la peinture et débloquer le FAT CAP avant d'être submergé.
+
+**Comment annuler** : restaurer `1.75 - this.time * 0.011` dans la ligne `interval`.
+
+**TODO / limitations** : tuning au ressenti — à affiner après retours en vraie partie.
+
+---
+
 ## 2026-07-10 — branche `feat/boss-arene`
 
 **Résumé** : boss d'arène — THE BUFF KING, nettoyeur géant couronné (accent magenta de

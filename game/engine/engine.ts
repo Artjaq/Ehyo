@@ -787,9 +787,11 @@ export class GameEngine {
       L.computeFlow(p.x, p.y)
     }
 
-    // Vagues : courbe scalée par le profil de qualité.
+    // Vagues : courbe scalée par le profil de qualité. Départ adouci (2.3 s
+    // entre spawns au lieu de 1.75) avec une pente un peu plus raide : la
+    // densité rejoint l'ancienne courbe vers ~2 min 20 et le plancher reste 0.45.
     this.spawnT -= dt
-    const interval = (Math.max(0.45, 1.75 - this.time * 0.011) * this.profile.spawnIntervalScale) / this.dm
+    const interval = (Math.max(0.45, 2.3 - this.time * 0.013) * this.profile.spawnIntervalScale) / this.dm
     if (this.spawnT <= 0 && this.enemyCount < this.effMaxEnemies()) {
       this.spawnT = interval
       const batch = 1 + Math.floor(this.time / this.profile.batchPeriod)
