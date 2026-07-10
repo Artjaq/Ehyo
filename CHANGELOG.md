@@ -8,6 +8,24 @@ entrée existante.
 
 ## 2026-07-10 — branche `game`
 
+**Résumé** : ajout de `SPECS_ENVIRONMENT.md` au repo (trace de la spec d'origine).
+Attention : rédigée pour Phaser (avant le pivot moteur custom) — le Scope 1 a été
+implémenté en adaptation (voir entrée précédente), le Scope 2 est à re-spécifier.
+
+**Fichiers créés**
+- `SPECS_ENVIRONMENT.md` — spec décor + expansion de map, versionnée telle quelle
+
+**Comment tester** : n/a (documentation).
+
+**Comment annuler** : `git rm SPECS_ENVIRONMENT.md`
+
+**TODO / limitations** : réécrire la spec pour le moteur custom avant d'attaquer le
+Scope 2 (expansion par déverrouillage de chunks plutôt que resize de world bounds).
+
+---
+
+## 2026-07-10 — branche `game`
+
 **Résumé** : mobilier urbain data-driven (Scope 1 de `SPECS_ENVIRONMENT.md`, adapté au
 moteur custom — la spec visait Phaser, retiré au pivot) : benne, barrière, cône, borne
 incendie, panneaux STOP/ONE WAY, avec collision et tri en profondeur.
