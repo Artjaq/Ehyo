@@ -6,6 +6,33 @@ entrée existante.
 
 ---
 
+## 2026-07-10 — branche `feat/arene-neon`
+
+**Résumé** : arène néon v1 — salle spéciale autorée (octogone 12×12 cellules, 1920 px),
+posée de façon **garantie** sur le premier port du cross de départ (adjacente au spawn),
+avec identité visuelle propre : voile magenta au sol, périmètre néon cyan, anneau magenta
++ logo EHYO géant au centre, tags autorés aux coins, enseigne « NEON ARENA ».
+
+**Fichiers modifiés**
+- `game/engine/level.ts` — chunk `ARENA_DEF` (hors CHUNK_LIB, jamais aléatoire) ;
+  factorisation `attach()` dans `tryBuild` (même math d'alignement) + placement garanti ;
+  `Level.arena` (emprise px) / `arenaLogo` ; helpers `inArena`/`cellInArena` ; exclusion
+  du décor aléatoire dans l'arène (tags sol, flaques, piliers, bancs, props) ; décor
+  autoré ; identité visuelle bakée dans `renderTile` (voile, lisières cyan, anneau, logo)
+
+**Comment tester** : `npm run build` puis `/game` — l'arène est à un chunk du spawn
+(`__ngs.debugInfo.chunks` contient `arena` en 2ᵉ position). Vérifier : salle traversable,
+lisible comme lieu à part (sol magenta, bords cyan, anneau + logo géant), pas de mobilier
+aléatoire dedans, fluide, OK en `?quality=mobile`. Vérifié via Chrome headless (screenshots).
+
+**Comment annuler** : `git checkout d3269ef -- game/engine/level.ts` (ou drop de la branche).
+
+**TODO / limitations** : renforcement CRT/glitch à l'entrée non fait (optionnel v1,
+demanderait un hook moteur→composant) ; gameplay spécial (déclencheur, boss) hors
+périmètre v1 ; l'enseigne nord est sautée si un chunk ultérieur a creusé au-dessus (rare).
+
+---
+
 ## 2026-07-10 — branche `game`
 
 **Résumé** : ajout de `SPECS_ENVIRONMENT.md` au repo (trace de la spec d'origine).

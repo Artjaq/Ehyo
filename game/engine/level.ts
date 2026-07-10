@@ -99,6 +99,33 @@ const CHUNK_LIB: ChunkDef[] = [
   },
 ]
 
+// Arène néon : salle spéciale AUTORÉE, volontairement hors de CHUNK_LIB (jamais
+// tirée au hasard — posée de façon garantie par tryBuild sur le premier port du
+// cross de départ). Grand octogone ouvert de 12×12 cellules (1920 px de côté,
+// vs 1280 pour un cross), coins biseautés, traversant W→E avec sortie S possible.
+const ARENA_DEF: ChunkDef = {
+  name: 'arena',
+  cells: [
+    '###......###',
+    '##........##',
+    '#..........#',
+    '............',
+    '............',
+    '............',
+    '............',
+    '............',
+    '............',
+    '#..........#',
+    '##........##',
+    '###......###',
+  ],
+  entry: { side: 'W', at: 4, width: 4 },
+  exits: [
+    { side: 'E', at: 4, width: 4 },
+    { side: 'S', at: 4, width: 4 },
+  ],
+}
+
 // ---------------------------------------------------------------------------
 // Rotation d'un chunk par quarts de tour horaires
 // ---------------------------------------------------------------------------
@@ -231,6 +258,44 @@ function tryBuild(targetChunks: number): BuildResult {
   let open = toWorldPort(start, 0, 0, start.exits[Math.floor(Math.random() * start.exits.length)])
   let lastName = 'cross'
 
+  // Tourne, aligne et pose un chunk sur le port ouvert courant ; en cas de
+  // succès, avance le port sur une sortie du chunk posé. (Même math qu'avant,
+  // factorisée pour servir aussi au placement garanti de l'arène.)
+  const attach = (def: ChunkDef): boolean => {
+    const entrySide = OPPOSITE[open.dir]
+    const rc = rotateChunk(def, ROTATION_FOR_ENTRY[entrySide])
+    const e = rc.entry
+    // Alignement centré des spans (gère couloir 4 ↔ ruelle 2).
+    const shift = Math.floor((open.width - e.width) / 2)
+    let ox: number
+    let oy: number
+    if (open.dir === 'E') {
+      ox = open.x + 1
+      oy = open.y + shift - e.at
+    } else if (open.dir === 'W') {
+      ox = open.x - 1 - (rc.cols - 1)
+      oy = open.y + shift - e.at
+    } else if (open.dir === 'S') {
+      oy = open.y + 1
+      ox = open.x + shift - e.at
+    } else {
+      oy = open.y - 1 - (rc.rows - 1)
+      ox = open.x + shift - e.at
+    }
+    if (!stamp(rc, ox, oy)) return false
+
+    // Prochaine sortie : au hasard parmi les exits du chunk posé.
+    const exit = rc.exits[Math.floor(Math.random() * rc.exits.length)]
+    open = toWorldPort(rc, ox, oy, exit)
+    lastName = def.name
+    return true
+  }
+
+  // Arène néon : posée de façon GARANTIE sur le premier port du cross de départ
+  // (seul le cross est stampé à ce stade → aucun chevauchement possible), donc
+  // toujours présente et adjacente au spawn. Le parcours continue par sa sortie.
+  attach(ARENA_DEF)
+
   for (let n = 0; n < targetChunks; n++) {
     // Tirage pondéré avec anti-répétition simple.
     const weights: Record<string, number> = { corridor: 3, turnS: 2, turnN: 2, cross: 1.4, alleyPlaza: 1.6 }
@@ -242,35 +307,10 @@ function tryBuild(targetChunks: number): BuildResult {
 
     let placedOne = false
     for (const name of candidates) {
-      const def = CHUNK_LIB.find((c) => c.name === name)!
-      const entrySide = OPPOSITE[open.dir]
-      const rc = rotateChunk(def, ROTATION_FOR_ENTRY[entrySide])
-      const e = rc.entry
-      // Alignement centré des spans (gère couloir 4 ↔ ruelle 2).
-      const shift = Math.floor((open.width - e.width) / 2)
-      let ox: number
-      let oy: number
-      if (open.dir === 'E') {
-        ox = open.x + 1
-        oy = open.y + shift - e.at
-      } else if (open.dir === 'W') {
-        ox = open.x - 1 - (rc.cols - 1)
-        oy = open.y + shift - e.at
-      } else if (open.dir === 'S') {
-        oy = open.y + 1
-        ox = open.x + shift - e.at
-      } else {
-        oy = open.y - 1 - (rc.rows - 1)
-        ox = open.x + shift - e.at
+      if (attach(CHUNK_LIB.find((c) => c.name === name)!)) {
+        placedOne = true
+        break
       }
-      if (!stamp(rc, ox, oy)) continue
-
-      // Prochaine sortie : au hasard parmi les exits du chunk posé.
-      const exit = rc.exits[Math.floor(Math.random() * rc.exits.length)]
-      open = toWorldPort(rc, ox, oy, exit)
-      lastName = name
-      placedOne = true
-      break
     }
     if (!placedOne) break // parcours bloqué : le niveau se termine en cul-de-sac
   }
@@ -298,6 +338,8 @@ export interface LogoKit { white: CanvasImageSource | null; black: CanvasImageSo
 export interface WallLogo { x: number; y: number; w: number; variant: 'white' | 'black' }
 export interface FloorLogo { x: number; y: number; w: number; rot: number }
 export interface Puddle { x: number; y: number; r: number; col: string }
+// Emprise de l'arène néon en pixels monde (bornes du chunk 'arena').
+export interface ArenaRect { x0: number; y0: number; x1: number; y1: number }
 export interface Obstacle { x: number; y: number; r: number }
 export interface Pillar { x: number; y: number }
 export interface Bench { x: number; y: number }
@@ -363,6 +405,8 @@ export class Level {
   benches: Bench[] = []
   props: PropInst[] = [] // mobilier urbain (registre PROP_DEFS)
   floorLogo: FloorLogo | null = null // logo blanc au sol : UN SEUL par niveau
+  arena: ArenaRect | null = null // emprise de l'arène néon (chunk garanti)
+  arenaLogo: FloorLogo | null = null // logo EHYO géant au centre de l'arène
   wallLogos: WallLogo[] = []
   chunkNames: string[] = [] // pour debug/inspection
 
@@ -406,6 +450,17 @@ export class Level {
     this.spawnY = (build.spawnCell.cy - minY + margin + 0.5) * CELL
     this.chunkNames = build.placed.map((p) => p.name)
 
+    // Emprise de l'arène néon (chunk posé de façon garantie par tryBuild).
+    const ap = build.placed.find((p) => p.name === 'arena')
+    if (ap) {
+      this.arena = {
+        x0: (ap.ox - minX + margin) * CELL,
+        y0: (ap.oy - minY + margin) * CELL,
+        x1: (ap.ox - minX + margin + ap.cols) * CELL,
+        y1: (ap.oy - minY + margin + ap.rows) * CELL,
+      }
+    }
+
     this.flow = new Int32Array(this.cols * this.rows).fill(-1)
     this.flowQueue = new Int32Array(this.cols * this.rows)
 
@@ -427,6 +482,17 @@ export class Level {
 
   private cellCenter(i: number): { x: number; y: number } {
     return { x: ((i % this.cols) + 0.5) * CELL, y: (Math.floor(i / this.cols) + 0.5) * CELL }
+  }
+
+  // Vrai si le point (px, py) est dans l'arène néon (pad élargit l'emprise).
+  private inArena(px: number, py: number, pad = 0): boolean {
+    const a = this.arena
+    return !!a && px > a.x0 - pad && px < a.x1 + pad && py > a.y0 - pad && py < a.y1 + pad
+  }
+
+  // Variante cellule (centre de cellule) pour le bake des tuiles.
+  private cellInArena(cx: number, cy: number): boolean {
+    return this.inArena((cx + 0.5) * CELL, (cy + 0.5) * CELL)
   }
 
   // Vrai si le cercle (x, y, r) repose entièrement sur du sol jouable.
@@ -641,10 +707,11 @@ export class Level {
         a: 0.38 + Math.random() * 0.25,
       })
     }
-    // Tags discrets au sol
+    // Tags discrets au sol (hors arène : son sol est autoré, pas aléatoire)
     const floorTagCount = Math.round(Math.min(26, (this.walkCells.length / 12) | 0) * this.density)
     for (let i = 0; i < floorTagCount; i++) {
       const c = this.cellCenter(this.walkCells[(Math.random() * this.walkCells.length) | 0])
+      if (this.inArena(c.x, c.y)) continue
       this.decals.push({
         x: c.x + (Math.random() - 0.5) * CELL,
         y: c.y + (Math.random() - 0.5) * CELL,
@@ -689,10 +756,11 @@ export class Level {
     // Dégage les graffitis d'ambiance autour des logos muraux (pas de recouvrement).
     this.decals = this.decals.filter((d) => this.wallLogos.every((l) => Math.hypot(d.x - l.x, d.y - l.y) > 130))
 
-    // Flaques avec reflets néon
+    // Flaques avec reflets néon (hors arène, même raison)
     const puddleCount = Math.round(Math.min(16, (this.walkCells.length / 18) | 0) * this.density)
     for (let i = 0; i < puddleCount; i++) {
       const c = this.cellCenter(this.walkCells[(Math.random() * this.walkCells.length) | 0])
+      if (this.inArena(c.x, c.y)) continue
       this.puddles.push({
         x: c.x + (Math.random() - 0.5) * CELL * 0.8,
         y: c.y + (Math.random() - 0.5) * CELL * 0.8,
@@ -706,6 +774,7 @@ export class Level {
       if (pillarBudget <= 0) break
       const c = this.cellCenter(i)
       if (Math.hypot(c.x - this.spawnX, c.y - this.spawnY) < 380) continue
+      if (this.inArena(c.x, c.y, CELL * 0.5)) continue // l'arène reste dégagée
       if (!farFromObstacles(c.x, c.y, CELL * 1.6)) continue
       this.pillars.push({ x: c.x, y: c.y })
       this.obstacles.push({ x: c.x, y: c.y, r: 38 })
@@ -719,6 +788,7 @@ export class Level {
       const bx = c.x
       const by = c.y - CELL / 2 + 40 // contre le mur du haut
       if (Math.hypot(bx - this.spawnX, by - this.spawnY) < 340) continue
+      if (this.inArena(bx, by, CELL * 0.5)) continue // l'arène reste dégagée
       if (!farFromObstacles(bx, by, CELL * 1.2)) continue
       this.benches.push({ x: bx, y: by })
       this.obstacles.push({ x: bx - 34, y: by, r: 24 }, { x: bx + 34, y: by, r: 24 })
@@ -739,6 +809,7 @@ export class Level {
           ? c.y - CELL / 2 + (def.wallOffset ?? 40)
           : c.y + (Math.random() - 0.5) * CELL * 0.5
         if (Math.hypot(px - this.spawnX, py - this.spawnY) < def.spawnDist) continue
+        if (this.inArena(px, py, CELL * 0.5)) continue // l'arène reste dégagée
         if (!farFromObstacles(px, py, def.spacing)) continue
         // Props de rue : rester entièrement sur du sol jouable (pas à cheval sur un mur).
         if (def.zone === 'floor' && !this.circleFits(px, py, 30)) continue
@@ -746,6 +817,35 @@ export class Level {
         this.props.push({ key: def.key, x: px, y: py, flip })
         for (const cir of def.circles) this.obstacles.push({ x: px + cir.dx * flip, y: py - 4, r: cir.r })
         budget--
+      }
+    }
+
+    // ---- Décor AUTORÉ de l'arène néon (le reste de la salle est volontairement
+    // vide : le lieu se lit par son sol, pas par l'encombrement) ----
+    if (this.arena) {
+      const a = this.arena
+      const acx = (a.x0 + a.x1) / 2
+      const acy = (a.y0 + a.y1) / 2
+      // Pièce maîtresse : logo EHYO géant bombé au centre (blanc, consigne de marque)
+      this.arenaLogo = { x: acx, y: acy, w: 480, rot: (Math.random() - 0.5) * 0.06 }
+      // Tags aux quatre coins intérieurs : magenta (accent arène) / cyan (signature)
+      const inset = CELL * 1.7
+      const corners: [number, number][] = [
+        [a.x0 + inset, a.y0 + inset], [a.x1 - inset, a.y0 + inset],
+        [a.x1 - inset, a.y1 - inset], [a.x0 + inset, a.y1 - inset],
+      ]
+      for (let k = 0; k < 4; k++) {
+        this.decals.push({
+          x: corners[k][0], y: corners[k][1],
+          txt: GRAFFITI_WORDS[(Math.random() * GRAFFITI_WORDS.length) | 0],
+          col: k % 2 ? '#00eaff' : '#ff00cc',
+          sz: 42, rot: (Math.random() - 0.5) * 0.24, a: 0.55,
+        })
+      }
+      // Enseigne dédiée sur la façade nord (seulement si c'est bien un mur :
+      // un chunk ultérieur peut, rarement, avoir creusé au-dessus de l'arène).
+      if (!this.walkableAt(acx, a.y0 - CELL / 2)) {
+        this.signs.push({ x: acx, y: a.y0 - CELL + 64, txt: 'NEON ARENA' })
       }
     }
   }
@@ -840,6 +940,15 @@ export class Level {
             ctx.fillStyle = '#232427'
             ctx.fillRect(x, y, CELL, CELL)
           }
+          // Sol de l'arène : voile magenta subtil — l'accent propre à la salle
+          // (bake uniquement, aucun coût par frame).
+          if (this.cellInArena(cx, cy)) {
+            ctx.save()
+            ctx.globalAlpha = 0.055
+            ctx.fillStyle = '#ff00cc'
+            ctx.fillRect(x, y, CELL, CELL)
+            ctx.restore()
+          }
         } else if (this.cellWalkable(cx, cy + 1)) {
           this.drawFacade(ctx, x, y)
         } else {
@@ -861,6 +970,8 @@ export class Level {
         if (!this.cellWalkable(cx, cy)) continue
         const x = cx * CELL
         const y = cy * CELL
+        // Dans l'arène, le périmètre passe au néon cyan (fil conducteur charte).
+        const inA = this.cellInArena(cx, cy)
         // Ombre du mur au-dessus
         if (!this.cellWalkable(cx, cy - 1)) {
           const g = ctx.createLinearGradient(0, y, 0, y + 30)
@@ -868,17 +979,23 @@ export class Level {
           g.addColorStop(1, 'rgba(0,0,0,0)')
           ctx.fillStyle = g
           ctx.fillRect(x, y, CELL, 30)
+          if (inA) {
+            ctx.fillStyle = 'rgba(0,234,255,.16)' // halo doux baké
+            ctx.fillRect(x, y, CELL, 12)
+            ctx.fillStyle = 'rgba(0,234,255,.85)'
+            ctx.fillRect(x, y + 1, CELL, 3)
+          }
         }
-        // Lisière basse : lip + ligne ambre (ADN du quai de métro)
+        // Lisière basse : lip + ligne néon (ambre en ville, cyan dans l'arène)
         if (!this.cellWalkable(cx, cy + 1)) {
           ctx.fillStyle = '#33353b'
           ctx.fillRect(x, y + CELL - 14, CELL, 14)
-          ctx.fillStyle = 'rgba(255,170,0,.6)'
+          ctx.fillStyle = inA ? 'rgba(0,234,255,.75)' : 'rgba(255,170,0,.6)'
           ctx.fillRect(x, y + CELL - 10, CELL, 5)
           ctx.fillStyle = '#0a0b0d'
           ctx.fillRect(x, y + CELL - 3, CELL, 3)
         }
-        // Bords latéraux : liseré sombre + ombre légère
+        // Bords latéraux : liseré sombre + ombre légère (+ néon cyan dans l'arène)
         if (!this.cellWalkable(cx - 1, cy)) {
           ctx.fillStyle = '#0a0b0d'
           ctx.fillRect(x, y, 5, CELL)
@@ -887,6 +1004,12 @@ export class Level {
           g.addColorStop(1, 'rgba(0,0,0,0)')
           ctx.fillStyle = g
           ctx.fillRect(x, y, 22, CELL)
+          if (inA) {
+            ctx.fillStyle = 'rgba(0,234,255,.16)'
+            ctx.fillRect(x + 5, y, 10, CELL)
+            ctx.fillStyle = 'rgba(0,234,255,.85)'
+            ctx.fillRect(x + 5, y, 3, CELL)
+          }
         }
         if (!this.cellWalkable(cx + 1, cy)) {
           ctx.fillStyle = '#0a0b0d'
@@ -896,6 +1019,12 @@ export class Level {
           g.addColorStop(1, 'rgba(0,0,0,.4)')
           ctx.fillStyle = g
           ctx.fillRect(x + CELL - 22, y, 22, CELL)
+          if (inA) {
+            ctx.fillStyle = 'rgba(0,234,255,.16)'
+            ctx.fillRect(x + CELL - 15, y, 10, CELL)
+            ctx.fillStyle = 'rgba(0,234,255,.85)'
+            ctx.fillRect(x + CELL - 8, y, 3, CELL)
+          }
         }
       }
     }
@@ -918,6 +1047,47 @@ export class Level {
       ctx.globalAlpha = 0.5
       ctx.drawImage(this.logos.white, -f.w / 2, -h / 2, f.w, h)
       ctx.restore()
+    }
+
+    // Pièce maîtresse de l'arène : anneau magenta + logo EHYO géant au centre.
+    // Marge de recouvrement dédiée (l'anneau déborde bien au-delà des 280 px
+    // de la marge standard).
+    if (this.arenaLogo) {
+      const alg = this.arenaLogo
+      const reach = 620
+      if (alg.x > ox - reach && alg.x < ox + TILE + reach && alg.y > oy - reach && alg.y < oy + TILE + reach) {
+        // Anneau double (trait net + halo large), accent magenta de l'arène
+        ctx.save()
+        ctx.strokeStyle = '#ff00cc'
+        ctx.globalAlpha = 0.13
+        ctx.lineWidth = 18
+        ctx.beginPath()
+        ctx.arc(alg.x, alg.y, 300, 0, 7)
+        ctx.stroke()
+        ctx.globalAlpha = 0.42
+        ctx.lineWidth = 5
+        ctx.beginPath()
+        ctx.arc(alg.x, alg.y, 300, 0, 7)
+        ctx.stroke()
+        // Graduations cyan aux quatre points cardinaux de l'anneau
+        ctx.fillStyle = '#00eaff'
+        ctx.globalAlpha = 0.6
+        ctx.fillRect(alg.x - 3, alg.y - 316, 6, 32)
+        ctx.fillRect(alg.x - 3, alg.y + 284, 6, 32)
+        ctx.fillRect(alg.x - 316, alg.y - 3, 32, 6)
+        ctx.fillRect(alg.x + 284, alg.y - 3, 32, 6)
+        ctx.restore()
+        // Logo EHYO géant bombé au sol (blanc, comme la marque de spawn)
+        if (this.logos?.white) {
+          const h = alg.w * 0.75
+          ctx.save()
+          ctx.translate(alg.x, alg.y)
+          ctx.rotate(alg.rot)
+          ctx.globalAlpha = 0.55
+          ctx.drawImage(this.logos.white, -alg.w / 2, -h / 2, alg.w, h)
+          ctx.restore()
+        }
+      }
     }
 
     // Flaques (reflets néon au sol)
