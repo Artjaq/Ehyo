@@ -115,7 +115,8 @@ Le déverrouillage donne la même perception d'expansion pour un coût quasi nul
 
 ## Hors scope (v2.1+)
 
-- Toast Vue à l'ouverture (nouveau hook moteur→composant typé).
+- ~~Toast Vue à l'ouverture (nouveau hook moteur→composant typé).~~ **Fait en v2.1** :
+  hook `zone(info: ZoneInfo)` + toast `.ngs-toast-zone` dans `GameCanvas.vue`.
 - Difficulté par secteur, nouveaux ennemis, boss d'arène.
 - Minimap / boussole permanente.
 - Récompense de zone (cache de peinture dans le secteur ouvert) — bonne idée, plus tard.

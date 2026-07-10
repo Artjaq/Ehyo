@@ -17,6 +17,7 @@ import {
   type HudState,
   type UnlockInfo,
   type WeaponUi,
+  type ZoneInfo,
 } from './engine/engine'
 
 const props = withDefaults(
@@ -52,11 +53,13 @@ const screen = ref<Screen>('start')
 const weaponsUi = shallowRef<WeaponUi[]>([])
 const finalStats = shallowRef<GameOverStats>({ time: '00:00', kills: 0, paint: 0 })
 const toast = shallowRef<UnlockInfo | null>(null)
+const zoneToast = shallowRef<ZoneInfo | null>(null)
 // Overlay CRT : activé selon le profil de qualité (désactivé sur mobile).
 const crtOn = ref(true)
 
 let engine: GameEngine | null = null
 let toastTimer = 0
+let zoneToastTimer = 0
 
 // Moteur → DOM : valeurs prêtes à afficher, écrites telles quelles chaque frame.
 function onHud(h: HudState): void {
@@ -78,6 +81,12 @@ function onUnlock(info: UnlockInfo): void {
   toast.value = info
   window.clearTimeout(toastTimer)
   toastTimer = window.setTimeout(() => (toast.value = null), 2600)
+}
+
+function onZone(info: ZoneInfo): void {
+  zoneToast.value = info
+  window.clearTimeout(zoneToastTimer)
+  zoneToastTimer = window.setTimeout(() => (zoneToast.value = null), 2600)
 }
 
 function onGameOver(stats: GameOverStats): void {
@@ -108,7 +117,7 @@ onMounted(() => {
     neon: props.neon,
     difficulty: props.difficulty,
     quality: props.quality,
-    hooks: { hud: onHud, weapons: onWeapons, unlock: onUnlock, gameOver: onGameOver },
+    hooks: { hud: onHud, weapons: onWeapons, unlock: onUnlock, zone: onZone, gameOver: onGameOver },
   })
   crtOn.value = engine.qualityProfile.crt
   if (import.meta.env.DEV) (window as unknown as { __ngs?: GameEngine }).__ngs = engine
@@ -117,6 +126,7 @@ onMounted(() => {
 onBeforeUnmount(() => {
   // Destruction propre : rAF annulé + tous les listeners retirés (AbortController).
   window.clearTimeout(toastTimer)
+  window.clearTimeout(zoneToastTimer)
   engine?.destroy()
   engine = null
   if (import.meta.env.DEV) delete (window as unknown as { __ngs?: GameEngine }).__ngs
@@ -181,6 +191,13 @@ onBeforeUnmount(() => {
     >
       NEW TOOL: <b :style="{ color: toast.color }">{{ toast.name }}</b>
       <span class="ngs-toastkey">[{{ toast.slot }}]</span>
+    </div>
+
+    <!-- Toast d'ouverture de zone (positionné sous le toast d'arme : les deux
+         peuvent tomber en même temps, ex. déblocage au même palier de peinture) -->
+    <div v-if="zoneToast" class="ngs-toast ngs-toast-zone">
+      ZONE OPEN <b>{{ zoneToast.opened }}/{{ zoneToast.total }}</b>
+      <span class="ngs-toastkey">FOLLOW THE DOTS</span>
     </div>
 
     <!-- Joysticks virtuels : gauche = déplacement, droite = visée/tir -->
@@ -408,6 +425,13 @@ onBeforeUnmount(() => {
   animation: ngs-toast-in 0.22s ease both;
 }
 .ngs-toastkey { color: #8a9098; margin-left: 8px; }
+/* Variante zone : cyan signature, décalé sous le toast d'arme */
+.ngs-toast-zone {
+  top: calc(132px + env(safe-area-inset-top, 0px));
+  border-color: var(--neon2);
+  box-shadow: 0 0 22px var(--neon2);
+}
+.ngs-toast-zone b { color: var(--neon2); }
 
 /* --- joysticks virtuels --- */
 .ngs-joybase {

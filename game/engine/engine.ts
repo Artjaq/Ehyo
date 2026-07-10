@@ -59,6 +59,12 @@ export interface UnlockInfo {
   slot: number
 }
 
+// Ouverture d'un secteur (porte tombée) : compte en SECTEURS, S0 inclus.
+export interface ZoneInfo {
+  opened: number // secteurs accessibles après l'ouverture
+  total: number // secteurs du niveau (portes + 1)
+}
+
 export interface GameOverStats {
   time: string
   kills: number
@@ -69,6 +75,7 @@ export interface EngineHooks {
   hud(h: HudState): void
   weapons(list: WeaponUi[]): void // à chaque déblocage / changement d'arme
   unlock(info: UnlockInfo): void // toast "nouvelle arme"
+  zone(info: ZoneInfo): void // toast "zone ouverte" (rare : 3 fois par run max)
   gameOver(stats: GameOverStats): void
 }
 
@@ -929,10 +936,15 @@ export class GameEngine {
         this.shake = Math.min(12, this.shake + 6)
         this.puff(g.x, g.y, '#00eaff', 14)
         this.spawnWord(g.x, g.y - 30, 'OPEN!', '#00eaff', 1.4)
-        this.spawnWord(p.x, p.y - 46, 'ZONE OUVERTE', '#00eaff', 1.6)
+        this.spawnWord(p.x, p.y - 46, 'ZONE OPEN', '#00eaff', 1.6)
         this.gateHint.x = g.x
         this.gateHint.y = g.y
         this.gateHint.ttl = GATE_HINT_TTL
+        // Toast Vue : événement rare → réactivité légitime (cf. EngineHooks).
+        this.hooks.zone({
+          opened: this.level.gates.filter((gg) => gg.open).length + 1,
+          total: this.level.gates.length + 1,
+        })
       } else {
         this.gateTier = GATE_KILLS.length // plus de porte : on ne reteste plus
       }

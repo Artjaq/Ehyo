@@ -6,6 +6,31 @@ entrée existante.
 
 ---
 
+## 2026-07-10 — branche `feat/zone-toast`
+
+**Résumé** : v2.1 des secteurs — toast Vue « ZONE OPEN x/y » à l'ouverture d'une porte,
+via un nouveau hook typé `zone(info)` dans `EngineHooks` (événement rare → réactivité
+légitime). Harmonisation du copy : le mot flottant « ZONE OUVERTE » devient « ZONE OPEN »
+(tout le copy du jeu est en anglais).
+
+**Fichiers modifiés**
+- `game/engine/engine.ts` — interface `ZoneInfo { opened, total }` (en secteurs, S0
+  inclus), hook `zone()` dans `EngineHooks`, émission à l'ouverture d'une porte,
+  mot flottant en anglais
+- `game/GameCanvas.vue` — handler `onZone` + `zoneToast` (shallowRef) + timer dédié
+  (2,6 s, nettoyé au démontage), toast cyan `.ngs-toast-zone` positionné sous le toast
+  d'arme (les deux peuvent tomber en même temps)
+
+**Comment tester** : `npm run build` puis `/game`, atteindre 30 kills (ou
+`__ngs.kills = 30` en dev) → toast « ZONE OPEN 2/4 · FOLLOW THE DOTS » 2,6 s sous la
+barre HUD, en plus du feedback in-canvas. Vérifié headless (screenshot + disparition).
+
+**Comment annuler** : `git checkout 4e7694c -- game/engine/engine.ts game/GameCanvas.vue`
+
+**TODO / limitations** : aucun.
+
+---
+
 ## 2026-07-10 — branche `feat/secteurs`
 
 **Résumé** : Scope 2 v2 — secteurs à déverrouiller. Le monde passe à ~14 chunks découpés
