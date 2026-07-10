@@ -17,8 +17,8 @@
 // IMPORTANT : tout l'état vit ici, jamais dans la réactivité Vue. La communication
 // avec le composant passe par des hooks basse fréquence + un hook HUD par frame.
 
-import { buildGlows, buildSprites, buildTile, drawSprite, NEONS, type BakedSprite } from './sprites'
-import { CELL, generateLevel, Level, type LogoKit } from './level'
+import { buildGlows, buildProps, buildSprites, buildTile, drawSprite, NEONS, type BakedSprite } from './sprites'
+import { CELL, generateLevel, Level, type LogoKit, type PropInst } from './level'
 import {
   detectProfile,
   FRAME_BUDGET_MS,
@@ -180,9 +180,10 @@ interface JoyState { id: number; ox: number; oy: number; x: number; y: number }
 type EngineState = 'idle' | 'playing' | 'over'
 
 // Tri en profondeur sans allocation : créneaux persistants triés par y.
-// kind : 0 = banc, 1 = pilier, 2 = ennemi, 3 = joueur. y = Infinity → inutilisé.
+// kind : 0 = banc, 1 = pilier, 2 = ennemi, 3 = joueur, 4 = prop urbain.
+// y = Infinity → inutilisé. Marge statique : bancs+piliers+props (~37 max) + joueur.
 interface SortSlot { y: number; kind: number; ref: unknown }
-const SORT_CAP = POOL_ENEMIES + 40
+const SORT_CAP = POOL_ENEMIES + 80
 const SORT_BY_Y = (a: SortSlot, b: SortSlot) => a.y - b.y
 
 const ENEMY_DEFS: Record<EnemyType, { spr: string; hp: number; spd: number; dmg: number; size: number; xp: number }> = {
@@ -225,6 +226,7 @@ export class GameEngine {
   private frameNo = 0
 
   private spr!: Record<string, BakedSprite>
+  private propSpr!: Record<string, BakedSprite>
   private glows!: Record<string, HTMLCanvasElement>
   private shadow!: HTMLCanvasElement
   private tilePattern!: CanvasPattern
@@ -311,6 +313,7 @@ export class GameEngine {
 
     this.ctx = this.canvas.getContext('2d')!
     this.spr = buildSprites(this.neon)
+    this.propSpr = buildProps()
     const gk = buildGlows(this.neon)
     this.glows = gk.glows
     this.shadow = gk.shadow
@@ -1310,6 +1313,13 @@ export class GameEngine {
       sl.kind = 1
       sl.ref = pl
     }
+    for (const pr of this.level.props) {
+      if (pr.x < x0 || pr.x > x1 || pr.y < y0 || pr.y > y1) continue
+      const sl = slots[n++]
+      sl.y = pr.y
+      sl.kind = 4
+      sl.ref = pr
+    }
     for (let i = 0; i < this.enemyCount; i++) {
       const e = this.enemies[i]
       if (e.x < x0 || e.x > x1 || e.y < y0 || e.y > y1) continue
@@ -1345,6 +1355,9 @@ export class GameEngine {
           break
         case 3:
           this.drawPlayer()
+          break
+        case 4:
+          this.drawProp(sl.ref as PropInst)
           break
       }
     }
@@ -1507,6 +1520,21 @@ export class GameEngine {
     ctx.fillRect(x - 8, y + 2, 16, 4)
     ctx.fillRect(x - 16, y + 10, 12, 4)
     ctx.globalAlpha = 1
+  }
+
+  // Mobilier urbain : sprite baké (buildProps), ancre au pied, flip aléatoire
+  // fixé au placement. Pas de halo : le décor reste sobre, budget mobile oblige.
+  private drawProp(pr: PropInst): void {
+    const ctx = this.ctx
+    const sp = this.propSpr[pr.key]
+    if (!sp) return
+    const w = sp.w * 3.5
+    if (this.frShadows) {
+      ctx.globalAlpha = 0.4
+      ctx.drawImage(this.shadow, pr.x - w * 0.45, pr.y - 3, w * 0.9, 11)
+      ctx.globalAlpha = 1
+    }
+    drawSprite(ctx, sp, pr.x, pr.y, 3.5, pr.flip)
   }
 
   private drawBench(x: number, y: number): void {

@@ -301,6 +301,38 @@ export interface Puddle { x: number; y: number; r: number; col: string }
 export interface Obstacle { x: number; y: number; r: number }
 export interface Pillar { x: number; y: number }
 export interface Bench { x: number; y: number }
+// Instance de mobilier urbain posée dans le monde. `key` référence un sprite
+// baké dans sprites.ts (buildProps) ; `flip` = miroir horizontal aléatoire.
+export interface PropInst { key: string; x: number; y: number; flip: number }
+
+// Registre data-driven du mobilier urbain : ajouter un prop = une entrée ici
+// + son sprite dans buildProps() (sprites.ts), rien d'autre.
+//  - zone       : 'wall' = adossé aux façades, 'floor' = en pleine rue
+//  - cap / per  : budget = min(cap, cellules_zone / per), scalé par la densité
+//  - wallOffset : décalage y depuis le haut de cellule (zone 'wall' uniquement)
+//  - spawnDist  : rayon préservé autour du spawn joueur (px)
+//  - spacing    : distance min aux obstacles déjà posés (px)
+//  - circles    : colliders circulaires relatifs au pied (dx miroité par flip) ;
+//                 r ≤ 38 obligatoire (hypothèse du pad des buckets d'obstacles)
+interface PropDef {
+  key: string
+  zone: 'wall' | 'floor'
+  cap: number
+  per: number
+  wallOffset?: number
+  spawnDist: number
+  spacing: number
+  circles: { dx: number; r: number }[]
+}
+
+const PROP_DEFS: PropDef[] = [
+  { key: 'dumpster', zone: 'wall', cap: 4, per: 9, wallOffset: 46, spawnDist: 360, spacing: CELL * 1.3, circles: [{ dx: -20, r: 22 }, { dx: 20, r: 22 }] },
+  { key: 'hydrant', zone: 'wall', cap: 3, per: 11, wallOffset: 36, spawnDist: 300, spacing: CELL * 1.1, circles: [{ dx: 0, r: 11 }] },
+  { key: 'sign_stop', zone: 'wall', cap: 2, per: 13, wallOffset: 32, spawnDist: 300, spacing: CELL * 1.5, circles: [{ dx: 0, r: 8 }] },
+  { key: 'sign_oneway', zone: 'wall', cap: 2, per: 13, wallOffset: 32, spawnDist: 300, spacing: CELL * 1.5, circles: [{ dx: 0, r: 8 }] },
+  { key: 'barrier', zone: 'floor', cap: 4, per: 24, spawnDist: 360, spacing: CELL * 1.4, circles: [{ dx: -18, r: 15 }, { dx: 18, r: 15 }] },
+  { key: 'cone', zone: 'floor', cap: 7, per: 16, spawnDist: 260, spacing: CELL * 0.9, circles: [{ dx: 0, r: 9 }] },
+]
 
 export interface LevelOpts {
   decalDensity?: number // multiplicateur de densité des graffitis/flaques (profil)
@@ -329,6 +361,7 @@ export class Level {
   obstacles: Obstacle[] = []
   pillars: Pillar[] = []
   benches: Bench[] = []
+  props: PropInst[] = [] // mobilier urbain (registre PROP_DEFS)
   floorLogo: FloorLogo | null = null // logo blanc au sol : UN SEUL par niveau
   wallLogos: WallLogo[] = []
   chunkNames: string[] = [] // pour debug/inspection
@@ -690,6 +723,30 @@ export class Level {
       this.benches.push({ x: bx, y: by })
       this.obstacles.push({ x: bx - 34, y: by, r: 24 }, { x: bx + 34, y: by, r: 24 })
       benchBudget--
+    }
+    // Mobilier urbain data-driven : une passe par entrée du registre PROP_DEFS.
+    // Même logique que piliers/bancs : shuffle + budget + évitement (spawn,
+    // obstacles déjà posés) ; les colliders vont dans this.obstacles AVANT
+    // buildObstacleBuckets(), donc pushOut les prend en compte gratuitement.
+    for (const def of PROP_DEFS) {
+      const cells = def.zone === 'wall' ? underWallCells : this.walkCells
+      let budget = Math.round(Math.min(def.cap, (cells.length / def.per) | 0) * this.density)
+      for (const i of shuffle(cells.slice())) {
+        if (budget <= 0) break
+        const c = this.cellCenter(i)
+        const px = c.x + (Math.random() - 0.5) * (def.zone === 'wall' ? 40 : CELL * 0.5)
+        const py = def.zone === 'wall'
+          ? c.y - CELL / 2 + (def.wallOffset ?? 40)
+          : c.y + (Math.random() - 0.5) * CELL * 0.5
+        if (Math.hypot(px - this.spawnX, py - this.spawnY) < def.spawnDist) continue
+        if (!farFromObstacles(px, py, def.spacing)) continue
+        // Props de rue : rester entièrement sur du sol jouable (pas à cheval sur un mur).
+        if (def.zone === 'floor' && !this.circleFits(px, py, 30)) continue
+        const flip = Math.random() < 0.5 ? -1 : 1
+        this.props.push({ key: def.key, x: px, y: py, flip })
+        for (const cir of def.circles) this.obstacles.push({ x: px + cir.dx * flip, y: py - 4, r: cir.r })
+        budget--
+      }
     }
   }
 

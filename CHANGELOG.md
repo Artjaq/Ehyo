@@ -8,6 +8,35 @@ entrée existante.
 
 ## 2026-07-10 — branche `game`
 
+**Résumé** : mobilier urbain data-driven (Scope 1 de `SPECS_ENVIRONMENT.md`, adapté au
+moteur custom — la spec visait Phaser, retiré au pivot) : benne, barrière, cône, borne
+incendie, panneaux STOP/ONE WAY, avec collision et tri en profondeur.
+
+**Fichiers modifiés**
+- `game/engine/sprites.ts` — `buildProps()` : 6 sprites pixel-art bakés par code
+- `game/engine/level.ts` — registre `PROP_DEFS` (zone, budget, espacement, colliders),
+  type `PropInst`, tableau `Level.props`, passe de placement dans `generateDecor()`
+  (shuffle + budget × densité du profil, évitement spawn/obstacles, colliders poussés
+  dans `obstacles` avant `buildObstacleBuckets`)
+- `game/engine/engine.ts` — bake `propSpr`, insertion des props dans le tri `sortSlots`
+  (kind 4), `drawProp()` (ombre + sprite, pas de halo), `SORT_CAP` 40 → 80 de marge
+- `CLAUDE.md` — section Niveau mise à jour (registre PROP_DEFS)
+
+**Comment tester** : `npm run build` puis partie sur `/game` — vérifier : props visibles
+en rue et contre les façades, joueur/ennemis bloqués dessus (pushOut), joueur passe
+devant/derrière correctement (tri y), rien sur le spawn, densité réduite sur mobile
+(`?quality=mobile`).
+
+**Comment annuler** : `git checkout 6e96d59 -- game/ CLAUDE.md`
+
+**TODO / limitations** : Scope 2 (expansion de map par kills) NON implémenté — la spec
+Phaser est incompatible avec le monde fixe par chunks, à re-spécifier avant chantier.
+Placement aléatoire non seedé (comme le reste de la génération).
+
+---
+
+## 2026-07-10 — branche `game`
+
 **Résumé** : code-split de Three.js/TresJS — la route `/shop` devient lazy dans le
 router, ce qui sort la 3D du chunk initial (1 081 kB → 128 kB, 309 → 47 kB gzippé).
 Mise à jour de la base Browserslist (caniuse-lite) au passage.

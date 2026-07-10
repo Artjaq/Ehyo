@@ -88,6 +88,57 @@ export function buildSprites(neon: string): Record<string, BakedSprite> {
   return out
 }
 
+// Mobilier urbain (props du décor) : mêmes conventions de bake que les
+// personnages — pixel art, ancre au pied, dessiné à l'échelle par le moteur.
+// Le registre de placement vit dans level.ts (PROP_DEFS) ; ici on ne fait
+// que fournir les visuels, clés identiques.
+export function buildProps(): Record<string, BakedSprite> {
+  const P: Record<string, SpriteDef> = {
+    // Benne à ordures taguée : le gros bloc contre les façades
+    dumpster: {
+      w: 24, h: 13, anchor: 'foot', glow: '#39ff14',
+      pal: { b: '#2e4a3a', l: '#3c6350', k: '#101315', t: '#ff00cc', s: '#22303a' },
+      r: [[1, 0, 22, 3, 'l'], [0, 3, 24, 8, 'b'], [0, 3, 24, 1, 'k'], [4, 6, 7, 3, 't'], [14, 5, 2, 5, 's'], [18, 5, 2, 5, 's'], [3, 11, 3, 2, 'k'], [18, 11, 3, 2, 'k']],
+    },
+    // Barrière de chantier : deux lisses rayées amber/noir sur pieds
+    barrier: {
+      w: 22, h: 9, anchor: 'foot', glow: '#ffaa00',
+      pal: { a: '#ffaa00', k: '#17181c', s: '#3d4149' },
+      r: [[1, 0, 5, 2, 'a'], [6, 0, 5, 2, 'k'], [11, 0, 5, 2, 'a'], [16, 0, 5, 2, 'k'], [1, 4, 5, 2, 'k'], [6, 4, 5, 2, 'a'], [11, 4, 5, 2, 'k'], [16, 4, 5, 2, 'a'], [2, 2, 2, 7, 's'], [18, 2, 2, 7, 's']],
+    },
+    // Cône de circulation : petit, bande réfléchissante blanche
+    cone: {
+      w: 7, h: 8, anchor: 'foot', glow: '#ffaa00',
+      pal: { a: '#ffaa00', w: '#e9edf2', k: '#17181c' },
+      r: [[3, 0, 1, 2, 'a'], [2, 2, 3, 2, 'a'], [2, 4, 3, 1, 'w'], [1, 5, 5, 2, 'a'], [0, 7, 7, 1, 'k']],
+    },
+    // Borne incendie : rouge sombre (le glitch pur reste réservé au danger)
+    hydrant: {
+      w: 7, h: 9, anchor: 'foot', glow: '#ff004c',
+      pal: { r: '#c1203c', d: '#7e1428', k: '#101214' },
+      r: [[2, 0, 3, 2, 'r'], [1, 2, 5, 6, 'r'], [0, 3, 1, 2, 'd'], [6, 3, 1, 2, 'd'], [1, 4, 5, 1, 'd'], [1, 8, 5, 1, 'k']],
+    },
+    // Panneau STOP sur poteau
+    sign_stop: {
+      w: 9, h: 16, anchor: 'foot', glow: '#ff004c',
+      pal: { r: '#ff004c', w: '#e9edf2', s: '#8f959c', k: '#101214' },
+      r: [[1, 0, 7, 7, 'r'], [2, 3, 5, 1, 'w'], [4, 7, 1, 8, 's'], [3, 15, 3, 1, 'k']],
+    },
+    // Panneau sens unique : plaque blanche, flèche noire
+    sign_oneway: {
+      w: 12, h: 15, anchor: 'foot', glow: '#00eaff',
+      pal: { w: '#e9edf2', k: '#101214', s: '#8f959c' },
+      r: [[0, 1, 12, 5, 'w'], [2, 3, 6, 1, 'k'], [7, 2, 2, 1, 'k'], [8, 3, 2, 1, 'k'], [7, 4, 2, 1, 'k'], [5, 6, 1, 8, 's'], [4, 14, 3, 1, 'k']],
+    },
+  }
+  const out: Record<string, BakedSprite> = {}
+  for (const key in P) {
+    const s = P[key]
+    out[key] = { cv: bake(s.w, s.h, s.r, s.pal), w: s.w, h: s.h, anchor: s.anchor, glow: s.glow }
+  }
+  return out
+}
+
 export interface GlowKit {
   glows: Record<string, HTMLCanvasElement>
   shadow: HTMLCanvasElement
