@@ -134,10 +134,12 @@ function makeWeapons(): WeaponDef[] {
 const ENERGY_MAX = 100
 const AMMO_DROP = 25 // énergie rendue par pickup (buffer / drone)
 
-// Bombe : distance de jet CONTRÔLABLE par la visée (amplitude du stick / distance
-// du curseur), interpolée entre ces deux bornes. Direction = aimX/aimY.
+// Bombe : ciblage AUTOMATIQUE de l'ennemi le plus proche dans un rayon COURT
+// (feedback joueur : les ennemis sont vite au contact, viser la distance à la
+// main était pénible). Sans cible à portée, repli sur la visée manuelle
+// (direction aimX/aimY, portée modulée par aimReach entre les deux bornes).
 const BOMB_MIN_THROW = 130
-const BOMB_MAX_THROW = 520
+const BOMB_MAX_THROW = 300 // sert aussi de rayon d'acquisition auto
 const BOMB_RADIUS = 80
 const BOMB_DMG = 40
 // Flaque corrosive laissée par l'explosion : zone de déni qui blesse dans le temps.
@@ -847,7 +849,7 @@ export class GameEngine {
     // entre spawns au lieu de 1.75) avec une pente un peu plus raide : la
     // densité rejoint l'ancienne courbe vers ~2 min 20 et le plancher reste 0.45.
     this.spawnT -= dt
-    const interval = (Math.max(0.45, 2.3 - this.time * 0.013) * this.profile.spawnIntervalScale) / this.dm
+    const interval = (Math.max(0.6, 2.3 - this.time * 0.012) * this.profile.spawnIntervalScale) / this.dm
     if (this.spawnT <= 0 && this.enemyCount < this.effMaxEnemies()) {
       this.spawnT = interval
       const batch = 1 + Math.floor(this.time / this.profile.batchPeriod)
@@ -1290,15 +1292,38 @@ export class GameEngine {
         break
       case 'bomb': {
         if (this.bombCount < POOL_BOMBS) {
-          // Distance de jet contrôlée par la visée (amplitude stick / curseur).
-          const throwDist = BOMB_MIN_THROW + (BOMB_MAX_THROW - BOMB_MIN_THROW) * p.aimReach
+          // Ciblage auto : la bombe tombe sur l'ennemi le plus proche à portée
+          // courte (balayage linéaire : ~1 tir/s, pool ≤ 240 — trivial).
+          let tx = 0
+          let ty = 0
+          let best = -1
+          let bestD2 = BOMB_MAX_THROW * BOMB_MAX_THROW
+          for (let i = 0; i < this.enemyCount; i++) {
+            const e = this.enemies[i]
+            const dx = e.x - p.x
+            const dy = e.y - p.y
+            const d2 = dx * dx + dy * dy
+            if (d2 < bestD2) {
+              bestD2 = d2
+              best = i
+            }
+          }
+          if (best >= 0) {
+            tx = this.enemies[best].x
+            ty = this.enemies[best].y
+          } else {
+            // Personne à portée : repli sur la visée manuelle, portée courte.
+            const throwDist = BOMB_MIN_THROW + (BOMB_MAX_THROW - BOMB_MIN_THROW) * p.aimReach
+            tx = p.x + p.aimX * throwDist
+            ty = p.y + p.aimY * throwDist
+          }
           const b = this.bombs[this.bombCount++]
           b.x = mx
           b.y = my
           b.sx = mx
           b.sy = my
-          b.tx = p.x + p.aimX * throwDist
-          b.ty = p.y + p.aimY * throwDist
+          b.tx = tx
+          b.ty = ty
           b.prog = 0
           b.spd = 430
           b.col = NEONS[(Math.random() * 4) | 0]

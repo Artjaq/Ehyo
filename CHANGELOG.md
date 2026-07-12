@@ -6,6 +6,39 @@ entrée existante.
 
 ---
 
+## 2026-07-11 — branche `feat/balance-spawn-bombe`
+
+**Résumé** : retours de jeu — 1) moins d'ennemis : plancher d'intervalle de spawn
+0.45 → 0.6 s, pente 0.013 → 0.012, vagues qui grossissent plus lentement
+(`batchPeriod` 34 → 44 desktop, 40 → 52 mobile), plafonds 220 → 180 / 80 → 70.
+2) PAINT BOMB en **ciblage automatique courte portée** : à chaque tir elle tombe sur
+l'ennemi le plus proche dans un rayon de 300 px (`BOMB_MAX_THROW` 520 → 300, sert de
+rayon d'acquisition) — les ennemis étant vite au contact, viser la distance à la main
+était pénible. Sans cible à portée : repli sur la visée manuelle (direction + aimReach,
+bornes 130..300).
+
+**Fichiers modifiés**
+- `game/engine/engine.ts` — courbe d'intervalle ; `fireWeapon` case bombe : acquisition
+  auto (balayage linéaire du pool, ~1 tir/s) + repli manuel
+- `game/engine/quality.ts` — `maxEnemies` 70/180, `batchPeriod` 52/44
+- `CLAUDE.md` — table d'armes, section Bombes, table des profils
+
+**Comment tester** : `npm run build` puis `/game` — la pression doit monter nettement
+plus doucement après 1 min 30 ; à la bombe (touche 3), tirer SANS viser un ennemi
+proche : elle tombe dessus toute seule ; sans ennemi à ~300 px, elle part dans la
+direction visée. Vérifié headless : visée à l'opposé + ennemi à 200 px → bombe pile
+sur l'ennemi (<2 px) ; ennemi à 400 px → repli (0, −300) ; profils 70/180 et 52/44
+actifs ; build 0 erreur.
+
+**Comment annuler** : `git checkout 8eb4bab -- game/engine/engine.ts game/engine/quality.ts CLAUDE.md`
+
+**TODO / limitations** : la bombe ne cible pas à travers la logique de ligne de vue
+(elle peut lober par-dessus un mur vers un ennemi proche — assumé, c'est une lobée) ;
+intensité des vagues à re-ressentir en vraie partie, surtout autour du boss (160 kills
+plus longs à atteindre avec moins d'ennemis).
+
+---
+
 ## 2026-07-10 — branche `feat/energy-gauge`
 
 **Résumé** : jauge d'énergie partagée (`ENERGY_MAX = 100`, pas de régén passive)

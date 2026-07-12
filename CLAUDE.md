@@ -123,7 +123,7 @@ petit côté < 768 px ; override via prop `quality` ou `?quality=`).
 | Champ | mobile | desktop |
 |---|---|---|
 | DPR max | 1 | 2 |
-| ennemis max | 80 | 220 |
+| ennemis max | 70 | 180 |
 | particules max | 90 | 300 |
 | halos | `near` | `full` |
 | CRT | non | oui |
@@ -152,15 +152,17 @@ Débloquées par paliers de **peinture cumulée**, switch manuel `1-4`.
 |---|---|---|---|---|---|
 | 1 | `spray` | SPRAY CAN | 0 | 0.16 s | 1 projectile droit, dmg 10 |
 | 2 | `marker` | MARKER | 28 | 0.30 s | trait perçant rapide (dmg 8, `pierce` 4 : traverse jusqu'à 4 ennemis, anti double-frappe via `lastHit`) |
-| 3 | `bomb` | PAINT BOMB | 80 | 0.9 s | bombe lobée à distance CONTRÔLABLE, explosion de zone + flaque corrosive |
+| 3 | `bomb` | PAINT BOMB | 80 | 0.9 s | bombe lobée à CIBLAGE AUTO courte portée, explosion de zone + flaque corrosive |
 | 4 | `aero` | AERO TORCH | 165 | 0.045 s | jet continu courte portée, dmg 4/tick, gros DPS |
 
 ### Bombes (le splat signature)
 
-Distance de jet **contrôlable par la visée** : `p.aimReach` (0..1, calculé dans
-`resolveAim()` — amplitude du stick de visée sur tactile, distance du curseur normalisée
-sur `[BOMB_MIN_THROW=130, BOMB_MAX_THROW=520]` à la souris → la bombe tombe sous le
-curseur tant qu'il est dans les bornes). `BOMB_RADIUS = 80`, `BOMB_DMG = 40`.
+**Ciblage automatique courte portée** : à chaque tir, la bombe tombe sur l'ennemi le
+plus proche dans un rayon de `BOMB_MAX_THROW = 300` (balayage linéaire du pool, ~1
+tir/s). Sans cible à portée, repli sur la visée manuelle : direction `aimX/aimY`,
+portée `p.aimReach` (0..1, calculé dans `resolveAim()` — amplitude du stick sur
+tactile, distance du curseur normalisée sur `[BOMB_MIN_THROW=130, BOMB_MAX_THROW=300]`
+à la souris). `BOMB_RADIUS = 80`, `BOMB_DMG = 40`.
 Hop parabolique jusqu'à la cible → `explode()` : dégâts + recul via hash spatial. Dépose un
 **splat de peinture permanent** au sol (ring buffer 60, 5-8 blobs) + particules + screen
 shake, et une **flaque corrosive** (pool 10, `PUDDLE_R=70`, `PUDDLE_DPS=22`,
