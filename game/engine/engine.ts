@@ -151,6 +151,22 @@ const MARKER_PIERCE = 5
 // Recul infligé par les tirs (px) : ouvre des couloirs dans la meute.
 const SHOT_KB = 12
 const SHOT_KB_AERO = 5
+// Chaque kill rend un peu d'énergie (le gros vient des pickups des porteurs).
+const ENERGY_KILL = 3
+// Brûlure du lance-flamme : DoT court ré-armé à chaque particule encaissée.
+const BURN_TIME = 1.2
+const BURN_DPS = 8
+// Bonus au sol lâchés par les ennemis : boosts temporaires ramassables.
+const POWERUP_DROP = 0.06 // probabilité par kill
+const POWERUP_TTL = 10 // durée de vie au sol (s)
+const BOOST_TIME = 7 // durée d'un boost (s)
+const BOOST_SPD_MULT = 1.35
+const BOOST_DMG_MULT = 1.5
+// Spawning par zone : plafond d'ennemis VIVANTS par phase (index = gateTier).
+// Petites valeurs = on peut nettoyer le terrain → vrais moments de calme ;
+// les renforts arrivent par la dernière porte ouverte et doivent marcher.
+const PHASE_ALIVE_CAP = [10, 13, 16, 20]
+const ENDGAME_ALIVE_BONUS = 6 // après le boss : l'endless se corse
 
 // Portes de secteur : paliers de kills qui ouvrent la porte suivante (source
 // unique : this.kills). Moins de portes que de paliers → paliers ignorés.
@@ -169,6 +185,7 @@ const POOL_SHOTS = 160
 const POOL_BOMBS = 24
 const POOL_ORBS = 240
 const POOL_AMMO = 40
+const POOL_POWERUPS = 8
 const POOL_PARTS = 320
 const POOL_TAGS = 16
 const POOL_SPLATS = 60
@@ -188,6 +205,8 @@ interface PlayerState {
   paint: number // peinture cumulée = monnaie de progression
   hurt: number // i-frame global : compte à rebours après un coup encaissé
   safe: number // temps écoulé depuis le dernier coup (déclenche la régén)
+  boostSpd: number // temps restant du boost de vitesse (bonus au sol)
+  boostDmg: number // temps restant du boost de dégâts (bonus au sol)
 }
 
 type EnemyType = 'dog' | 'tagger' | 'cop' | 'buffer' | 'drone' | 'boss'
@@ -199,6 +218,7 @@ interface EnemyEnt {
   spd: number; dmg: number; size: number; xp: number
   face: number; hitT: number; flash: number
   elite: boolean; scale: number
+  burn: number // brûlure du lance-flamme : temps de DoT restant
 }
 
 // Projectile en ligne droite (spray / marker / aérosol).
@@ -216,6 +236,8 @@ interface PuddleEnt { x: number; y: number; r: number; dps: number; ttl: number;
 interface OrbEnt { x: number; y: number; xp: number; vx: number; vy: number; col: string }
 // Pickup d'énergie lâché par les ennemis « porteurs » (buffer / drone).
 interface AmmoEnt { x: number; y: number; vx: number; vy: number; amt: number }
+// Bonus au sol : boost temporaire (vitesse / dégâts) ramassé au contact.
+interface PowerupEnt { x: number; y: number; kind: 'speed' | 'damage'; ttl: number }
 interface PartEnt { x: number; y: number; vx: number; vy: number; r: number; col: string; life: number; max: number }
 interface SplatBlob { dx: number; dy: number; r: number }
 interface SplatDecal { x: number; y: number; col: string; blobs: SplatBlob[]; nb: number }
@@ -304,6 +326,10 @@ export class GameEngine {
   private orbCount = 0
   private ammo: AmmoEnt[] = []
   private ammoCount = 0
+  private powerups: PowerupEnt[] = []
+  private powerupCount = 0
+  // Dernière porte ouverte : point d'arrivée des renforts au sol (fiction de zone).
+  private lastGate = { x: 0, y: 0, active: false }
   // Jauge d'énergie partagée des armes lourdes (remontée uniquement par pickups).
   private energy = ENERGY_MAX
   private parts: PartEnt[] = []
@@ -429,7 +455,7 @@ export class GameEngine {
   // Pré-alloue tous les pools une seule fois (aucune création d'objet en partie).
   private allocPools(): void {
     for (let i = 0; i < POOL_ENEMIES; i++) {
-      this.enemies.push({ type: 'dog', spr: 'dog', x: 0, y: 0, hp: 0, maxHp: 0, spd: 0, dmg: 0, size: 0, xp: 0, face: 1, hitT: 0, flash: 0, elite: false, scale: 1 })
+      this.enemies.push({ type: 'dog', spr: 'dog', x: 0, y: 0, hp: 0, maxHp: 0, spd: 0, dmg: 0, size: 0, xp: 0, face: 1, hitT: 0, flash: 0, elite: false, scale: 1, burn: 0 })
     }
     for (let i = 0; i < POOL_SHOTS; i++) {
       this.shots.push({ x: 0, y: 0, vx: 0, vy: 0, ttl: 0, max: 1, dmg: 0, r: 0, col: '#fff', kind: 'shot', pierce: 1, lastHit: null })
@@ -445,6 +471,9 @@ export class GameEngine {
     }
     for (let i = 0; i < POOL_AMMO; i++) {
       this.ammo.push({ x: 0, y: 0, vx: 0, vy: 0, amt: 0 })
+    }
+    for (let i = 0; i < POOL_POWERUPS; i++) {
+      this.powerups.push({ x: 0, y: 0, kind: 'speed', ttl: 0 })
     }
     for (let i = 0; i < POOL_PARTS; i++) {
       this.parts.push({ x: 0, y: 0, vx: 0, vy: 0, r: 1, col: '#fff', life: 0, max: 1 })
@@ -501,6 +530,7 @@ export class GameEngine {
       aimX: 1, aimY: 0, aimReach: 1, firing: false,
       paint: 0,
       hurt: 0, safe: 0,
+      boostSpd: 0, boostDmg: 0,
     }
     this.weapons = makeWeapons()
     this.activeId = 'spray'
@@ -510,6 +540,8 @@ export class GameEngine {
     this.puddleCount = 0
     this.orbCount = 0
     this.ammoCount = 0
+    this.powerupCount = 0
+    this.lastGate.active = false
     this.energy = ENERGY_MAX
     this.partCount = 0
     this.tagCount = 0
@@ -747,7 +779,17 @@ export class GameEngine {
   }
 
   private effMaxEnemies(): number {
-    return this.perfLevel >= 2 ? Math.floor(this.profile.maxEnemies * 0.7) : this.profile.maxEnemies
+    const perfCap = this.perfLevel >= 2 ? Math.floor(this.profile.maxEnemies * 0.7) : this.profile.maxEnemies
+    // Plafond de PHASE : peu d'ennemis vivants par zone → on peut nettoyer le
+    // terrain et souffler ; l'endless post-boss relâche la bride.
+    let phaseCap = PHASE_ALIVE_CAP[Math.min(this.gateTier, PHASE_ALIVE_CAP.length - 1)]
+    if (this.bossDone) phaseCap += ENDGAME_ALIVE_BONUS
+    return Math.min(perfCap, phaseCap)
+  }
+
+  // Multiplicateur de dégâts du boost au sol (appliqué au moment du tir).
+  private dmgMult(): number {
+    return this.p.boostDmg > 0 ? BOOST_DMG_MULT : 1
   }
 
   private effMaxParticles(): number {
@@ -801,7 +843,8 @@ export class GameEngine {
 
     // Déplacement : collision grille (glissement) + obstacles (buckets spatiaux).
     const mv = this.moveVec()
-    L.moveCircle(p, mv.x * p.speed * dt, mv.y * p.speed * dt, 12)
+    const runSpd = p.speed * (p.boostSpd > 0 ? BOOST_SPD_MULT : 1)
+    L.moveCircle(p, mv.x * runSpd * dt, mv.y * runSpd * dt, 12)
     L.pushOut(p, 12)
 
     this.updateCamera()
@@ -836,6 +879,8 @@ export class GameEngine {
 
     // Survie : i-frame global + régénération hors combat.
     if (p.hurt > 0) p.hurt -= dt
+    if (p.boostSpd > 0) p.boostSpd -= dt
+    if (p.boostDmg > 0) p.boostDmg -= dt
     p.safe += dt
     if (p.safe > REGEN_DELAY && p.hp < p.maxHp) {
       p.hp = Math.min(p.maxHp, p.hp + REGEN_RATE * dt)
@@ -917,6 +962,11 @@ export class GameEngine {
         this.shake = Math.min(9, this.shake + 4)
         if (p.hp <= 0) return this.gameOver()
       }
+      // Brûlure du lance-flamme : DoT tant que le timer court.
+      if (e.burn > 0) {
+        e.burn -= dt
+        e.hp -= BURN_DPS * dt
+      }
       e.flash = Math.max(0, e.flash - dt * 6)
       if (e.hp <= 0) this.killEnemyAt(i)
     }
@@ -967,6 +1017,7 @@ export class GameEngine {
               } else if (e.type !== 'boss') {
                 L.moveCircle(e, (s.vx / sv) * kb, (s.vy / sv) * kb, e.size * 0.28)
               }
+              if (s.kind === 'aero') e.burn = BURN_TIME // le lance-flamme enflamme
               this.puff(s.x, s.y, s.col, s.kind === 'aero' ? 1 : 2)
               s.lastHit = e
               // Budget de traversée : le marker continue à travers les rangs,
@@ -991,7 +1042,7 @@ export class GameEngine {
       const step = b.spd * dt
       b.rot += dt * 14
       if (d <= step + 4) {
-        this.explode(b.tx, b.ty, BOMB_RADIUS, BOMB_DMG, b.col)
+        this.explode(b.tx, b.ty, BOMB_RADIUS, BOMB_DMG * this.dmgMult(), b.col)
         this.bombCount--
         this.bombs[i] = this.bombs[this.bombCount]
         this.bombs[this.bombCount] = b
@@ -1080,6 +1131,33 @@ export class GameEngine {
       }
     }
 
+    // Bonus au sol : expiration + ramassage au contact (pas d'aimant — le
+    // positionnement fait partie du choix).
+    for (let i = this.powerupCount - 1; i >= 0; i--) {
+      const pw = this.powerups[i]
+      pw.ttl -= dt
+      let consumed = pw.ttl <= 0
+      if (!consumed) {
+        const dx = p.x - pw.x
+        const dy = p.y - pw.y
+        if (dx * dx + dy * dy < 24 * 24) {
+          if (pw.kind === 'speed') {
+            p.boostSpd = BOOST_TIME
+            this.spawnWord(p.x, p.y - 40, 'SPEED UP', '#00eaff', 1.3)
+          } else {
+            p.boostDmg = BOOST_TIME
+            this.spawnWord(p.x, p.y - 40, 'DMG UP', '#ff004c', 1.3)
+          }
+          consumed = true
+        }
+      }
+      if (consumed) {
+        this.powerupCount--
+        this.powerups[i] = this.powerups[this.powerupCount]
+        this.powerups[this.powerupCount] = pw
+      }
+    }
+
     // Caches de peinture : ramassage au contact (3 max par run — boucle triviale).
     for (let i = 0; i < L.caches.length; i++) {
       const c = L.caches[i]
@@ -1133,6 +1211,10 @@ export class GameEngine {
         this.gateHint.x = g.x
         this.gateHint.y = g.y
         this.gateHint.ttl = GATE_HINT_TTL
+        // Les renforts au sol arrivent désormais par CETTE ouverture.
+        this.lastGate.x = g.x
+        this.lastGate.y = g.y
+        this.lastGate.active = true
         // Toast Vue : événement rare → réactivité légitime (cf. EngineHooks).
         this.hooks.zone({
           opened: this.level.gates.filter((gg) => gg.open).length + 1,
@@ -1219,6 +1301,7 @@ export class GameEngine {
     e.face = 1
     e.hitT = 0
     e.flash = 0
+    e.burn = 0
     e.elite = true // halo garanti même en profil mobile (glow 'near'/'elite')
     e.scale = 1.7
     this.bossRef = e
@@ -1237,6 +1320,16 @@ export class GameEngine {
   private killEnemyAt(i: number): void {
     const e = this.enemies[i]
     this.kills++
+    // Chaque kill rend un peu d'énergie (sinon la jauge est trop punitive).
+    this.energy = Math.min(ENERGY_MAX, this.energy + ENERGY_KILL)
+    // Bonus au sol : drop occasionnel d'un boost temporaire (vitesse / dégâts).
+    if (Math.random() < POWERUP_DROP && this.powerupCount < POOL_POWERUPS) {
+      const pw = this.powerups[this.powerupCount++]
+      pw.x = e.x
+      pw.y = e.y
+      pw.kind = Math.random() < 0.5 ? 'speed' : 'damage'
+      pw.ttl = POWERUP_TTL
+    }
     // Porteurs d'énergie : buffer et drone lâchent un pickup qui recharge la
     // jauge des armes lourdes (même pattern poolé que les orbes).
     if ((e.type === 'buffer' || e.type === 'drone') && this.ammoCount < POOL_AMMO) {
@@ -1317,11 +1410,11 @@ export class GameEngine {
 
     switch (w.id) {
       case 'spray':
-        this.spawnShot(mx, my, base, 520, 14, 4, 1.1, '#00eaff', 'shot', 1)
+        this.spawnShot(mx, my, base, 520, 14 * this.dmgMult(), 4, 1.1, '#00eaff', 'shot', 1)
         break
       case 'marker':
         // Trait perçant : rapide, fin, traverse jusqu'à MARKER_PIERCE ennemis alignés.
-        this.spawnShot(mx, my, base, 640, 12, 3, 1.2, '#ffaa00', 'marker', MARKER_PIERCE)
+        this.spawnShot(mx, my, base, 640, 12 * this.dmgMult(), 3, 1.2, '#ffaa00', 'marker', MARKER_PIERCE)
         break
       case 'bomb': {
         if (this.bombCount < POOL_BOMBS) {
@@ -1365,11 +1458,13 @@ export class GameEngine {
         break
       }
       case 'aero':
-        // Jet continu : 2 particules par tick, jitter d'angle, portée courte.
-        for (let i = 0; i < 2; i++) {
-          const jitter = (Math.random() - 0.5) * 0.3
-          const spd = 340 + Math.random() * 120
-          this.spawnShot(mx, my, base + jitter, spd, 5, 3, 0.26 + Math.random() * 0.1, Math.random() < 0.5 ? '#39ff14' : '#8aff5c', 'aero', 1)
+        // Vrai LANCE-FLAMME : cône large (~40°), 3 particules par tick, portée
+        // courte ; chaque particule enflamme la cible (DoT BURN_DPS, cf. passe
+        // ennemis). Couleurs vert/ambre = flamme de peinture.
+        for (let i = 0; i < 3; i++) {
+          const jitter = (Math.random() - 0.5) * 0.7
+          const spd = 320 + Math.random() * 140
+          this.spawnShot(mx, my, base + jitter, spd, 5 * this.dmgMult(), 3, 0.28 + Math.random() * 0.14, Math.random() < 0.5 ? '#39ff14' : '#ffaa00', 'aero', 1)
         }
         break
     }
@@ -1435,8 +1530,8 @@ export class GameEngine {
       }
     }
     const d = ENEMY_DEFS[key]
-    let ex: number
-    let ey: number
+    let ex = 0
+    let ey = 0
     if (key === 'drone') {
       // Les drones arrivent par les airs : anneau autour du joueur, murs ignorés.
       const ang = Math.random() * Math.PI * 2
@@ -1444,12 +1539,28 @@ export class GameEngine {
       ex = Math.max(30, Math.min(this.level.W - 30, this.p.x + Math.cos(ang) * rad))
       ey = Math.max(30, Math.min(this.level.H - 30, this.p.y + Math.sin(ang) * rad))
     } else {
-      // Au sol : cellule jouable hors écran dans un anneau de distance.
-      const rmin = Math.max(this.vw, this.vh) * 0.5 + 80
-      const pt = this.level.randomSpawnPoint(this.p.x, this.p.y, rmin, rmin + 560, this.cam.x, this.cam.y, this.vw, this.vh)
-      if (!pt) return
-      ex = pt.x
-      ey = pt.y
+      // Au sol : les renforts arrivent par la DERNIÈRE porte ouverte (fiction
+      // de zone — ils doivent marcher jusqu'au joueur, ce qui crée des accalmies).
+      // Phase 0 (aucune porte) ou point invalide : anneau hors écran classique.
+      let found = false
+      if (this.lastGate.active) {
+        for (let attempt = 0; attempt < 6 && !found; attempt++) {
+          const gx = this.lastGate.x + (Math.random() - 0.5) * 180
+          const gy = this.lastGate.y + (Math.random() - 0.5) * 180
+          if (this.level.walkableAt(gx, gy)) {
+            ex = gx
+            ey = gy
+            found = true
+          }
+        }
+      }
+      if (!found) {
+        const rmin = Math.max(this.vw, this.vh) * 0.5 + 80
+        const pt = this.level.randomSpawnPoint(this.p.x, this.p.y, rmin, rmin + 560, this.cam.x, this.cam.y, this.vw, this.vh)
+        if (!pt) return
+        ex = pt.x
+        ey = pt.y
+      }
     }
     const elite = t > 78 && Math.random() < 0.07
     const hpScale = 1 + t * 0.008
@@ -1464,6 +1575,7 @@ export class GameEngine {
     e.dmg = d.dmg * (elite ? 1.6 : 1)
     e.size = d.size * (elite ? 1.4 : 1)
     e.xp = d.xp * (elite ? 4 : 1)
+    e.burn = 0
     e.face = 1
     e.hitT = 0
     e.flash = 0
@@ -1509,7 +1621,7 @@ export class GameEngine {
       pu.x = x
       pu.y = y
       pu.r = PUDDLE_R
-      pu.dps = PUDDLE_DPS
+      pu.dps = PUDDLE_DPS * (dmg / BOMB_DMG) // hérite du boost de dégâts éventuel
       pu.ttl = PUDDLE_TTL
       pu.max = PUDDLE_TTL
     }
@@ -1718,6 +1830,35 @@ export class GameEngine {
         ctx.fill()
       }
     }
+
+    // Bonus au sol : pastille colorée + glyphe blanc (clignote avant d'expirer).
+    for (let i = 0; i < this.powerupCount; i++) {
+      const pw = this.powerups[i]
+      if (pw.x < x0 || pw.x > x1 || pw.y < y0 || pw.y > y1) continue
+      const col = pw.kind === 'speed' ? '#00eaff' : '#ff004c'
+      const blinkA = pw.ttl < 2 ? 0.35 + 0.5 * Math.abs(Math.sin(this.time * 8)) : 1
+      if (this.frFx) this.glow(col, pw.x, pw.y, 28, 0.6 * blinkA)
+      ctx.globalAlpha = blinkA
+      ctx.fillStyle = col
+      ctx.beginPath()
+      ctx.arc(pw.x, pw.y, 8, 0, 7)
+      ctx.fill()
+      ctx.fillStyle = '#f4feff'
+      if (pw.kind === 'speed') {
+        // flèche « vitesse »
+        ctx.beginPath()
+        ctx.moveTo(pw.x - 3, pw.y - 4)
+        ctx.lineTo(pw.x + 4, pw.y)
+        ctx.lineTo(pw.x - 3, pw.y + 4)
+        ctx.closePath()
+        ctx.fill()
+      } else {
+        // croix « + dégâts »
+        ctx.fillRect(pw.x - 1.5, pw.y - 5, 3, 10)
+        ctx.fillRect(pw.x - 5, pw.y - 1.5, 10, 3)
+      }
+    }
+    ctx.globalAlpha = 1
 
     // Caches de peinture : sprite baké + halo magenta pulsé (3 max par run,
     // toujours affiché même en profil bas — c'est un objectif, pas du décor).
@@ -1997,6 +2138,15 @@ export class GameEngine {
       ctx.fillRect(e.x - (sp.w * sc) / 2, e.y - sp.h * sc, sp.w * sc, sp.h * sc)
       ctx.restore()
     }
+    // En feu (lance-flamme) : flicker ambre sur le sprite.
+    if (e.burn > 0) {
+      ctx.save()
+      ctx.globalCompositeOperation = 'lighter'
+      ctx.globalAlpha = 0.18 + 0.12 * Math.sin(this.time * 30)
+      ctx.fillStyle = '#ffaa00'
+      ctx.fillRect(e.x - (sp.w * sc) / 2, e.y - sp.h * sc, sp.w * sc, sp.h * sc)
+      ctx.restore()
+    }
   }
 
   private drawPlayer(): void {
@@ -2007,9 +2157,14 @@ export class GameEngine {
       ctx.drawImage(this.shadow, p.x - 16, p.y + 2, 32, 13)
       ctx.globalAlpha = 1
     }
-    // Halo vert discret quand on régénère (hors combat), sinon halo néon.
+    // Aura selon l'état : régén (vert) > boost dégâts (rouge) > boost vitesse
+    // (cyan) > néon signature.
     const regen = p.safe > REGEN_DELAY && p.hp < p.maxHp
-    this.glow(regen ? '#39ff14' : this.neon, p.x, p.y - 6, 34, regen ? 0.5 : 0.45)
+    let auraCol = this.neon
+    if (regen) auraCol = '#39ff14'
+    else if (p.boostDmg > 0) auraCol = '#ff004c'
+    else if (p.boostSpd > 0) auraCol = '#00eaff'
+    this.glow(auraCol, p.x, p.y - 6, 34, regen ? 0.5 : 0.45)
     // Clignotement pendant l'i-frame pour signaler l'invulnérabilité.
     ctx.globalAlpha = p.hurt > 0 ? 0.45 + 0.3 * Math.sin(this.time * 40) : 1
     drawSprite(ctx, this.spr.player, p.x, p.y, 3.5, p.face)
@@ -2091,6 +2246,7 @@ export class GameEngine {
     boss: number | null
     cachesLeft: number
     puddles: number; aimReach: number
+    energy: number; powerups: number; aliveCap: number
   } {
     return {
       chunks: this.level.chunkNames,
@@ -2117,6 +2273,9 @@ export class GameEngine {
       cachesLeft: this.level.caches.filter((c) => !c.taken).length,
       puddles: this.puddleCount,
       aimReach: this.p.aimReach,
+      energy: this.energy,
+      powerups: this.powerupCount,
+      aliveCap: this.effMaxEnemies(),
     }
   }
 }

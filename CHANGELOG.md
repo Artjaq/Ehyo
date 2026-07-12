@@ -6,6 +6,42 @@ entrée existante.
 
 ---
 
+## 2026-07-11 — branche `feat/balance-spawn-bombe` (3ᵉ passe)
+
+**Résumé** : retours de jeu — 4 chantiers. 1) **AERO = vrai lance-flamme** : cône
+~40° (3 particules/tick, couleurs vert/ambre) + **brûlure** (`BURN_DPS 8` pendant
+1.2 s, ré-armée à chaque particule, flicker ambre au rendu). 2) **Énergie par kill** :
++3 par ennemi tué (`ENERGY_KILL`), en plus des pickups des porteurs. 3) **Bonus au
+sol** : drop 6 %/kill d'un boost 7 s — SPEED ×1.35 (badge cyan ▶) ou DMG ×1.5 (badge
+rouge +, appliqué au tir : spray/marker/aero/bombe/flaque) ; ramassage au contact,
+expiration 10 s (clignote), aura joueur teintée, pool 8 zéro alloc. 4) **Spawning par
+zone** : plafond d'ennemis VIVANTS par phase (`PHASE_ALIVE_CAP` [10,13,16,20], +6
+post-boss, borné par le profil perf) et les renforts au sol apparaissent **près de la
+dernière porte ouverte** (jitter 180 px, 6 tirages walkable, repli anneau hors écran)
+→ on peut nettoyer le terrain et souffler, les vagues arrivent par l'entrée.
+
+**Fichiers modifiés**
+- `game/engine/engine.ts` — tout ce qui précède (constantes en tête de fichier,
+  `PowerupEnt` poolé, `EnemyEnt.burn`, `lastGate`, passes ajoutées sans réordonner
+  les existantes, `debugInfo.energy/powerups/aliveCap`)
+- `CLAUDE.md` — état à jour
+
+**Comment tester** : `npm run build` puis `/game` — arme 4 : cône de flammes, ennemis
+qui brûlent après le jet ; les kills font remonter la jauge ENERGY ; badges au sol
+cyan/rouge → « SPEED UP » / « DMG UP » 7 s ; en début de partie max 10 ennemis
+vivants, et après une porte les renforts débarquent par elle. Vérifié headless :
++3 énergie/kill (50→53), burn actif + DoT, boosts 7 s + spray 14→21, caps 10→13 à
+l'ouverture, spawn à 34 px de la porte, build 0 erreur.
+
+**Comment annuler** : `git checkout 53cb3f5 -- game/engine/engine.ts CLAUDE.md`
+
+**TODO / limitations** : proba/durées des bonus et caps de phase à ajuster au
+ressenti ; les drones gardent leur spawn aérien (fiction assumée) ; si le joueur
+campe loin de la porte, les renforts font la queue dans les couloirs (voulu — ça
+crée les accalmies demandées).
+
+---
+
 ## 2026-07-11 — branche `feat/balance-spawn-bombe` (2ᵉ passe)
 
 **Résumé** : retours de jeu (« encore trop d'ennemis, on n'arrive pas à se déplacer ni

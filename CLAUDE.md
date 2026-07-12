@@ -153,7 +153,7 @@ Débloquées par paliers de **peinture cumulée**, switch manuel `1-4`.
 | 1 | `spray` | SPRAY CAN | 0 | 0.13 s | 1 projectile droit, dmg 14 |
 | 2 | `marker` | MARKER | 28 | 0.24 s | trait perçant rapide (dmg 12, `pierce` 5 : traverse jusqu'à 5 ennemis, anti double-frappe via `lastHit`) |
 | 3 | `bomb` | PAINT BOMB | 80 | 0.9 s | bombe lobée à CIBLAGE AUTO courte portée, explosion de zone + flaque corrosive |
-| 4 | `aero` | AERO TORCH | 165 | 0.045 s | jet continu courte portée, dmg 4/tick, gros DPS |
+| 4 | `aero` | AERO TORCH | 165 | 0.045 s | LANCE-FLAMME : cône ~40° (3 particules/tick), dmg 5 + brûlure (`BURN_DPS` 8, 1.2 s) |
 
 ### Bombes (le splat signature)
 
@@ -198,7 +198,11 @@ spawn en vagues, flow field, orbes de peinture (aimant),
 i-frames + régén, HUD, game over, génération de niveau, 3 difficultés (easy/normal/hard —
 `hard` augmente dégâts subis **et** cadence de spawn). Joueur : 130 HP, i-frame 0.45 s,
 régén après 3.0 s (9 HP/s), vitesse 185 px/s ; les tirs infligent un recul (`SHOT_KB`)
-qui ouvre des couloirs dans la meute. Hook DEV : en dev uniquement, `window.__ngs` expose le moteur (câblé
+qui ouvre des couloirs dans la meute. **Énergie** : +3 par kill (`ENERGY_KILL`) en plus
+des pickups des porteurs. **Bonus au sol** (drop 6 %/kill, 7 s) : SPEED ×1.35 / DMG ×1.5.
+**Spawning par zone** : plafond d'ennemis vivants par phase (`PHASE_ALIVE_CAP`
+[10,13,16,20], +6 post-boss) et renforts au sol apparaissant près de la dernière porte
+ouverte (accalmies garanties, vagues qui arrivent par l'entrée). Hook DEV : en dev uniquement, `window.__ngs` expose le moteur (câblé
 dans `GameCanvas.vue`), getter `debugInfo` complet.
 
 ---
