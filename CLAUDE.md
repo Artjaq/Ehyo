@@ -123,7 +123,7 @@ petit côté < 768 px ; override via prop `quality` ou `?quality=`).
 | Champ | mobile | desktop |
 |---|---|---|
 | DPR max | 1 | 2 |
-| ennemis max | 70 | 180 |
+| ennemis max | 60 | 140 |
 | particules max | 90 | 300 |
 | halos | `near` | `full` |
 | CRT | non | oui |
@@ -150,8 +150,8 @@ Débloquées par paliers de **peinture cumulée**, switch manuel `1-4`.
 
 | Slot | id | Nom | Coût | Cadence | Comportement |
 |---|---|---|---|---|---|
-| 1 | `spray` | SPRAY CAN | 0 | 0.16 s | 1 projectile droit, dmg 10 |
-| 2 | `marker` | MARKER | 28 | 0.30 s | trait perçant rapide (dmg 8, `pierce` 4 : traverse jusqu'à 4 ennemis, anti double-frappe via `lastHit`) |
+| 1 | `spray` | SPRAY CAN | 0 | 0.13 s | 1 projectile droit, dmg 14 |
+| 2 | `marker` | MARKER | 28 | 0.24 s | trait perçant rapide (dmg 12, `pierce` 5 : traverse jusqu'à 5 ennemis, anti double-frappe via `lastHit`) |
 | 3 | `bomb` | PAINT BOMB | 80 | 0.9 s | bombe lobée à CIBLAGE AUTO courte portée, explosion de zone + flaque corrosive |
 | 4 | `aero` | AERO TORCH | 165 | 0.045 s | jet continu courte portée, dmg 4/tick, gros DPS |
 
@@ -162,10 +162,10 @@ plus proche dans un rayon de `BOMB_MAX_THROW = 300` (balayage linéaire du pool,
 tir/s). Sans cible à portée, repli sur la visée manuelle : direction `aimX/aimY`,
 portée `p.aimReach` (0..1, calculé dans `resolveAim()` — amplitude du stick sur
 tactile, distance du curseur normalisée sur `[BOMB_MIN_THROW=130, BOMB_MAX_THROW=300]`
-à la souris). `BOMB_RADIUS = 80`, `BOMB_DMG = 40`.
+à la souris). `BOMB_RADIUS = 80`, `BOMB_DMG = 55`.
 Hop parabolique jusqu'à la cible → `explode()` : dégâts + recul via hash spatial. Dépose un
 **splat de peinture permanent** au sol (ring buffer 60, 5-8 blobs) + particules + screen
-shake, et une **flaque corrosive** (pool 10, `PUDDLE_R=70`, `PUDDLE_DPS=22`,
+shake, et une **flaque corrosive** (pool 10, `PUDDLE_R=70`, `PUDDLE_DPS=30`,
 `PUDDLE_TTL=3.5 s`) qui blesse dans le temps — passe dédiée dans `update()` placée avec
 les bombes (elle lit le hash), liseré pulsé coupé sur profil bas (le disque reste).
 Pas de flaque sur les `explode()` à 0 dégât (splat de mort du boss).
@@ -189,7 +189,7 @@ cellules atteignables (`openCells`), anti-leak par BFS au build (cf.
 
 Moteur mature et complet dans son périmètre, **pas de TODO/placeholder** dans le code.
 Fonctionnel : boucle, 4 armes, 5 ennemis (dog/tagger/cop/buffer/drone volant) + élites
-après 78 s + scaling temporel, **boss d'arène** (THE BUFF KING à `BOSS_KILLS = 160`,
+après 78 s + scaling temporel, **boss d'arène** (THE BUFF KING à `BOSS_KILLS = 130`,
 confiné dans l'arène, slam de zone, barre HP dédiée dans le HUD, jackpot d'orbes à sa
 mort — un par run), **récompenses de zone** (cache de peinture au fond de chaque secteur
 ouvert, +30/+45/+60), **minimap** (coin haut-droit, layout baké par `Level.getMinimap`,
@@ -197,7 +197,8 @@ re-baké seulement à l'ouverture d'une porte ; joueur/caméra/caches/boss par-d
 spawn en vagues, flow field, orbes de peinture (aimant),
 i-frames + régén, HUD, game over, génération de niveau, 3 difficultés (easy/normal/hard —
 `hard` augmente dégâts subis **et** cadence de spawn). Joueur : 130 HP, i-frame 0.45 s,
-régén après 3.5 s. Hook DEV : en dev uniquement, `window.__ngs` expose le moteur (câblé
+régén après 3.0 s (9 HP/s), vitesse 185 px/s ; les tirs infligent un recul (`SHOT_KB`)
+qui ouvre des couloirs dans la meute. Hook DEV : en dev uniquement, `window.__ngs` expose le moteur (câblé
 dans `GameCanvas.vue`), getter `debugInfo` complet.
 
 ---

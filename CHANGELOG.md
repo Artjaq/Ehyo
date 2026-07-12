@@ -6,6 +6,43 @@ entrée existante.
 
 ---
 
+## 2026-07-11 — branche `feat/balance-spawn-bombe` (2ᵉ passe)
+
+**Résumé** : retours de jeu (« encore trop d'ennemis, on n'arrive pas à se déplacer ni
+où aller, pas assez puissant, gameplay à accélérer ») — grosse passe de power-fantasy :
+1) Encore moins d'ennemis : intervalle 3.0 s → plancher 0.8 s (pente 0.010), vagues +1
+toutes les 60 s (desktop) / 75 s (mobile), plafonds 140/60, PV ennemis scalés ×0.008/s
+(au lieu de 0.010). 2) Joueur agressif : vitesse 158 → 185, spray 0.13 s/14 dmg (dps
++73 %), marker 0.24 s/12 dmg/pierce 5 (coût énergie 3 → 2), bombe 55 dmg + flaque 30
+dps (coût 20 → 15), aero 5 dmg — et **recul sur chaque tir touché** (`SHOT_KB` 12 px,
+5 px aero, boss insensible, borné par les murs) : le feu ouvre des couloirs dans la
+meute. 3) Rythme accéléré : aimant de ramassage 78 → 110 px (vitesse 340), régén 3 s /
+9 HP/s, paliers de portes [25, 60, 100], boss à 130 kills. 4) « Où aller » : les
+pointillés pointent en continu (pulse 2 s) vers le cache non ramassé le plus proche
+quand aucun hint de porte/boss n'est actif.
+
+**Fichiers modifiés**
+- `game/engine/engine.ts` — constantes armes/joueur/spawn/portes/boss, recul dans la
+  passe de collision des tirs, cap permanent vers le cache (ré-armé par frame, zéro alloc)
+- `game/engine/quality.ts` — `maxEnemies` 60/140, `batchPeriod` 75/60
+- `CLAUDE.md` — table d'armes, bombes, profils, état joueur/boss
+
+**Comment tester** : `npm run build` puis `/game` — le joueur court plus vite que tout
+sauf les chiens, le spray repousse visiblement la meute, la pression reste lisible
+après 2 min, les pointillés guident vers le cache. Vérifié headless : recul 72 px sur
+6 tirs (12 px/tir), dégâts 6×14, cap pointé pile sur le cache après expiration du hint
+de porte, densité à 2 min passives = cap (60 mobile) avec un rythme de spawn (~0.4-1/s)
+très inférieur à la capacité de kill (~2.5/s au spray).
+
+**Comment annuler** : `git checkout 6c1b0b3 -- game/engine/engine.ts game/engine/quality.ts CLAUDE.md`
+
+**TODO / limitations** : gros batch de tuning à re-ressentir en une session complète
+(early/mid/boss) ; le cap cache pulse toutes les 2 s (fondu du ttl ré-armé — assumé) ;
+avec moins de kills/min, vérifier que la boucle d'énergie (drops buffer/drone) ne
+devient pas trop rare.
+
+---
+
 ## 2026-07-11 — branche `feat/balance-spawn-bombe`
 
 **Résumé** : retours de jeu — 1) moins d'ennemis : plancher d'intervalle de spawn

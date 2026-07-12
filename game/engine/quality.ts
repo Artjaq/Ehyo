@@ -25,9 +25,9 @@ export const PROFILES: Record<'mobile' | 'desktop', QualityProfile> = {
   mobile: {
     name: 'mobile',
     dprCap: 1,
-    maxEnemies: 70,
+    maxEnemies: 60,
     spawnIntervalScale: 1.15,
-    batchPeriod: 52,
+    batchPeriod: 75,
     glow: 'near',
     glowNearDist: 300,
     shotGlow: false,
@@ -40,9 +40,9 @@ export const PROFILES: Record<'mobile' | 'desktop', QualityProfile> = {
   desktop: {
     name: 'desktop',
     dprCap: 2,
-    maxEnemies: 180,
+    maxEnemies: 140,
     spawnIntervalScale: 1,
-    batchPeriod: 44,
+    batchPeriod: 60,
     glow: 'full',
     glowNearDist: 0,
     shotGlow: true,

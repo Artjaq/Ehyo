@@ -119,11 +119,11 @@ function makeWeapons(): WeaponDef[] {
   return [
     // Tir direct rapide : l'arme de base, précise à moyenne portée. Jamais
     // consommatrice d'énergie : toujours disponible.
-    { id: 'spray', slot: 1, name: 'SPRAY CAN', tag: 'S', color: '#00eaff', cost: 0, rate: 0.16, cd: 0, unlocked: true, heavy: false, ammo: 0 },
+    { id: 'spray', slot: 1, name: 'SPRAY CAN', tag: 'S', color: '#00eaff', cost: 0, rate: 0.13, cd: 0, unlocked: true, heavy: false, ammo: 0 },
     // Marqueur : trait perçant rapide qui traverse plusieurs ennemis alignés.
-    { id: 'marker', slot: 2, name: 'MARKER', tag: 'M', color: '#ffaa00', cost: 28, rate: 0.3, cd: 0, unlocked: false, heavy: true, ammo: 3 },
+    { id: 'marker', slot: 2, name: 'MARKER', tag: 'M', color: '#ffaa00', cost: 28, rate: 0.24, cd: 0, unlocked: false, heavy: true, ammo: 2 },
     // Bombe lobée : explose en zone à l'impact (le splat signature du proto).
-    { id: 'bomb', slot: 3, name: 'PAINT BOMB', tag: 'B', color: '#ff00cc', cost: 80, rate: 0.9, cd: 0, unlocked: false, heavy: true, ammo: 20 },
+    { id: 'bomb', slot: 3, name: 'PAINT BOMB', tag: 'B', color: '#ff00cc', cost: 80, rate: 0.9, cd: 0, unlocked: false, heavy: true, ammo: 15 },
     // Jet d'aérosol continu : lance-flamme courte portée, gros DPS risqué.
     { id: 'aero', slot: 4, name: 'AERO TORCH', tag: 'A', color: '#39ff14', cost: 165, rate: 0.045, cd: 0, unlocked: false, heavy: true, ammo: 1 },
   ]
@@ -141,23 +141,26 @@ const AMMO_DROP = 25 // énergie rendue par pickup (buffer / drone)
 const BOMB_MIN_THROW = 130
 const BOMB_MAX_THROW = 300 // sert aussi de rayon d'acquisition auto
 const BOMB_RADIUS = 80
-const BOMB_DMG = 40
+const BOMB_DMG = 55
 // Flaque corrosive laissée par l'explosion : zone de déni qui blesse dans le temps.
 const PUDDLE_R = 70
-const PUDDLE_DPS = 22
+const PUDDLE_DPS = 30
 const PUDDLE_TTL = 3.5
 // Marker : budget de traversée du trait perçant (nb d'ennemis touchés max).
-const MARKER_PIERCE = 4
+const MARKER_PIERCE = 5
+// Recul infligé par les tirs (px) : ouvre des couloirs dans la meute.
+const SHOT_KB = 12
+const SHOT_KB_AERO = 5
 
 // Portes de secteur : paliers de kills qui ouvrent la porte suivante (source
 // unique : this.kills). Moins de portes que de paliers → paliers ignorés.
-const GATE_KILLS = [30, 75, 130]
+const GATE_KILLS = [25, 60, 100]
 const GATE_HINT_TTL = 4 // durée (s) du cap pointillé vers la porte ouverte
 
 // Accessibilité : survie du joueur.
 const HIT_IFRAME = 0.45 // invulnérabilité globale après un coup (amortit les nuées)
-const REGEN_DELAY = 3.5 // secondes sans coup avant de récupérer des HP
-const REGEN_RATE = 7 // HP/s régénérés hors combat (récompense le repli)
+const REGEN_DELAY = 3.0 // secondes sans coup avant de récupérer des HP
+const REGEN_RATE = 9 // HP/s régénérés hors combat (récompense le repli)
 
 // Capacités des pools — pré-alloués une fois au boot ; les profils de qualité
 // bornent le nombre VIVANT, jamais la capacité (pas de realloc en cours de run).
@@ -240,7 +243,7 @@ const ENEMY_DEFS: Record<EnemyType, { spr: string; hp: number; spd: number; dmg:
 }
 
 // THE BUFF KING : boss unique, confiné dans l'arène, déclenché aux kills.
-const BOSS_KILLS = 160 // après la dernière porte (GATE_KILLS max = 130)
+const BOSS_KILLS = 130 // après la dernière porte (GATE_KILLS max = 100)
 const BOSS_SLAM_CD = 3.2 // secondes entre deux slams
 const BOSS_SLAM_RANGE = 170 // portée du slam (px)
 const BOSS_SLAM_DMG = 16 // dégâts du slam (× multiplicateur de difficulté)
@@ -494,7 +497,7 @@ export class GameEngine {
     this.hashHeads = new Int32Array(this.level.cols * this.level.rows)
     this.p = {
       x: this.level.spawnX, y: this.level.spawnY,
-      hp: 130, maxHp: 130, speed: 158, face: 1,
+      hp: 130, maxHp: 130, speed: 185, face: 1,
       aimX: 1, aimY: 0, aimReach: 1, firing: false,
       paint: 0,
       hurt: 0, safe: 0,
@@ -849,7 +852,7 @@ export class GameEngine {
     // entre spawns au lieu de 1.75) avec une pente un peu plus raide : la
     // densité rejoint l'ancienne courbe vers ~2 min 20 et le plancher reste 0.45.
     this.spawnT -= dt
-    const interval = (Math.max(0.6, 2.3 - this.time * 0.012) * this.profile.spawnIntervalScale) / this.dm
+    const interval = (Math.max(0.8, 3.0 - this.time * 0.010) * this.profile.spawnIntervalScale) / this.dm
     if (this.spawnT <= 0 && this.enemyCount < this.effMaxEnemies()) {
       this.spawnT = interval
       const batch = 1 + Math.floor(this.time / this.profile.batchPeriod)
@@ -954,6 +957,16 @@ export class GameEngine {
             if (ddx * ddx + ddy * ddy < rr * rr) {
               e.hp -= s.dmg
               e.flash = 1
+              // Recul du tir : ouvre des couloirs dans la meute (le boss, lui,
+              // ne bronche pas). Borné par les murs pour les ennemis au sol.
+              const sv = Math.hypot(s.vx, s.vy) || 1
+              const kb = s.kind === 'aero' ? SHOT_KB_AERO : SHOT_KB
+              if (e.type === 'drone') {
+                e.x += (s.vx / sv) * kb
+                e.y += (s.vy / sv) * kb
+              } else if (e.type !== 'boss') {
+                L.moveCircle(e, (s.vx / sv) * kb, (s.vy / sv) * kb, e.size * 0.28)
+              }
               this.puff(s.x, s.y, s.col, s.kind === 'aero' ? 1 : 2)
               s.lastHit = e
               // Budget de traversée : le marker continue à travers les rangs,
@@ -1031,9 +1044,9 @@ export class GameEngine {
       const dx = p.x - o.x
       const dy = p.y - o.y
       const d = Math.hypot(dx, dy) || 1
-      if (d < 78) {
-        o.x += (dx / d) * 260 * dt
-        o.y += (dy / d) * 260 * dt
+      if (d < 110) {
+        o.x += (dx / d) * 340 * dt
+        o.y += (dy / d) * 340 * dt
       }
       if (d < 16) {
         const gained = o.xp
@@ -1055,9 +1068,9 @@ export class GameEngine {
       const dx = p.x - a.x
       const dy = p.y - a.y
       const d = Math.hypot(dx, dy) || 1
-      if (d < 78) {
-        a.x += (dx / d) * 260 * dt
-        a.y += (dy / d) * 260 * dt
+      if (d < 110) {
+        a.x += (dx / d) * 340 * dt
+        a.y += (dy / d) * 340 * dt
       }
       if (d < 16) {
         this.energy = Math.min(ENERGY_MAX, this.energy + a.amt)
@@ -1131,6 +1144,26 @@ export class GameEngine {
       }
     }
     if (this.gateHint.ttl > 0) this.gateHint.ttl -= dt
+    // « Où aller » : sans hint actif, le cap pointe en continu vers le cache de
+    // peinture non ramassé le plus proche (objectif d'exploration permanent).
+    // ttl re-armé chaque frame à 2 s → alpha stable et discret dans le rendu.
+    if (this.gateHint.ttl <= 0) {
+      const caches = L.caches
+      let bcd2 = Infinity
+      for (let i = 0; i < caches.length; i++) {
+        const c = caches[i]
+        if (c.taken) continue
+        const cdx = c.x - p.x
+        const cdy = c.y - p.y
+        const cd2 = cdx * cdx + cdy * cdy
+        if (cd2 < bcd2) {
+          bcd2 = cd2
+          this.gateHint.x = c.x
+          this.gateHint.y = c.y
+          this.gateHint.ttl = 2
+        }
+      }
+    }
 
     // Boss d'arène : un seul par run, déclenché au palier de kills.
     if (!this.bossDone && !this.bossRef && this.kills >= BOSS_KILLS) {
@@ -1284,11 +1317,11 @@ export class GameEngine {
 
     switch (w.id) {
       case 'spray':
-        this.spawnShot(mx, my, base, 520, 10, 4, 1.1, '#00eaff', 'shot', 1)
+        this.spawnShot(mx, my, base, 520, 14, 4, 1.1, '#00eaff', 'shot', 1)
         break
       case 'marker':
         // Trait perçant : rapide, fin, traverse jusqu'à MARKER_PIERCE ennemis alignés.
-        this.spawnShot(mx, my, base, 640, 8, 3, 1.2, '#ffaa00', 'marker', MARKER_PIERCE)
+        this.spawnShot(mx, my, base, 640, 12, 3, 1.2, '#ffaa00', 'marker', MARKER_PIERCE)
         break
       case 'bomb': {
         if (this.bombCount < POOL_BOMBS) {
@@ -1336,7 +1369,7 @@ export class GameEngine {
         for (let i = 0; i < 2; i++) {
           const jitter = (Math.random() - 0.5) * 0.3
           const spd = 340 + Math.random() * 120
-          this.spawnShot(mx, my, base + jitter, spd, 4, 3, 0.26 + Math.random() * 0.1, Math.random() < 0.5 ? '#39ff14' : '#8aff5c', 'aero', 1)
+          this.spawnShot(mx, my, base + jitter, spd, 5, 3, 0.26 + Math.random() * 0.1, Math.random() < 0.5 ? '#39ff14' : '#8aff5c', 'aero', 1)
         }
         break
     }
@@ -1419,7 +1452,7 @@ export class GameEngine {
       ey = pt.y
     }
     const elite = t > 78 && Math.random() < 0.07
-    const hpScale = 1 + t * 0.010
+    const hpScale = 1 + t * 0.008
     const e = this.enemies[this.enemyCount++]
     e.type = key
     e.spr = d.spr
