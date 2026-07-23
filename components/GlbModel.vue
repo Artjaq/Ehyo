@@ -31,7 +31,6 @@ onBeforeRender(({ delta }) => {
   <!-- Show placeholder while loading -->
   <HoloMesh v-if="isLoading || !state" />
 
-  <!-- Render loaded scene graph -->
   <TresPrimitive
     v-else
     ref="groupRef"

@@ -6,6 +6,31 @@ entrée existante.
 
 ---
 
+## 2026-07-23 — branche `main`
+
+**Résumé** : réécriture complète du `README.md`, jusque-là périmé (il décrivait encore la
+migration React→Vue et une structure `src/…` qui n'existe plus). Nouveau README orienté
+**portfolio**, rédigé dans le style du site (bloc ASCII EHYO, prompts `>` terminal,
+ton cyberpunk) : pitch de la marque, stack, charte, carte des routes, section détaillée
+sur NEON GRAFFITI SURVIVOR et ses partis pris d'ingénierie, commandes, liens docs.
+
+**Fichiers modifiés**
+- `README.md` — réécrit intégralement
+- `CHANGELOG.md` — cette entrée
+
+**Comment tester** : ouvrir `README.md` (preview Markdown) — vérifier que les liens
+relatifs vers `CLAUDE.md`, `CHARTE-GRAPHIQUE.md`, `CHANGELOG.md` résolvent et que les
+routes listées correspondent à `router/index.ts`. Aucun code touché : pas de build requis.
+
+**Comment annuler** : `git checkout HEAD~1 -- README.md CHANGELOG.md` (ou depuis le
+commit de référence `125d19a` pour l'ancienne version du README).
+
+**Limitations** : le README ne documente pas les specs détaillées (`SPECS_*.md`,
+`BRIEF_SHOOTER_STREET.md`) ; il renvoie vers `CLAUDE.md`. Section paiements décrite
+comme « prévue » — à mettre à jour quand Stripe/TWINT passeront en prod.
+
+---
+
 ## 2026-07-11 — branche `feat/balance-spawn-bombe` (3ᵉ passe)
 
 **Résumé** : retours de jeu — 4 chantiers. 1) **AERO = vrai lance-flamme** : cône
