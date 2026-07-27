@@ -65,12 +65,12 @@ function handleBuy() {
 
           <h2 class="font-press text-2xl sm:text-3xl product-name">{{ product.name }}</h2>
 
-          <!-- Badge drop à venir — le prix reste visible (hype) -->
+          <!-- Badge drop à venir — remplace le prix, gardé secret jusqu'au drop -->
           <p v-if="product.comingSoon" class="coming-soon-badge font-press">
             COMING SOON
           </p>
 
-          <p class="font-press text-xl product-price">{{ displayPrice }}</p>
+          <p v-if="!product.comingSoon" class="font-press text-xl product-price">{{ displayPrice }}</p>
 
           <p class="font-press text-[8px] sm:text-[9px] leading-6 tracking-widest product-desc">
             {{ product.description }}

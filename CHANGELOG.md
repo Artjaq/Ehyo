@@ -6,6 +6,31 @@ entrée existante.
 
 ---
 
+## 2026-07-27 (2) — branche `feat/coming-soon`
+
+**Résumé** : le prix est désormais **masqué** quand `comingSoon === true` — révision du
+parti pris de l'entrée précédente (qui gardait le prix visible « pour la hype ») : on garde
+le suspense jusqu'au drop. Pas de placeholder, le badge « COMING SOON » occupe la place.
+
+**Fichiers modifiés**
+- `views/ProductDetailPage.vue` — `v-if="!product.comingSoon"` sur le `<p class="product-price">` ;
+  commentaire du badge mis à jour
+- `CHANGELOG.md` — cette entrée
+
+**Comment tester** : `npm run build` (vue-tsc) puis `npm run dev` — `/shop/unit-001` :
+plus aucun prix affiché, badge « COMING SOON » puis directement la description ;
+l'espacement `gap-5` de la colonne reste régulier (le nœud est retiré, pas juste masqué).
+Passer `comingSoon: false` dans `data/products.ts` → le prix `CHF 49.00` réapparaît.
+
+**Comment annuler** : `git checkout e1a61d9 -- views/ProductDetailPage.vue` (commit de
+l'état « prix visible »).
+
+**Limitations** : `displayPrice` reste calculé même quand il n'est pas rendu (sans effet —
+computed paresseux). Les limites de l'entrée précédente tiennent toujours : flag statique,
+verrou purement visuel côté client.
+
+---
+
 ## 2026-07-27 — branche `feat/coming-soon`
 
 **Résumé** : ajout d'un état « coming soon » piloté par flag sur un produit, pour faire la
