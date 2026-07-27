@@ -13,6 +13,7 @@ export interface Product {
   maxStock: number      // hard cap for limited drops
   modelPath?: string    // path to .glb file for 3D viewer (optional)
   color: string         // hex accent color for slot card
+  comingSoon?: boolean  // drop pas encore ouvert : promo visible, achat verrouillé
 }
 
 export const products: Product[] = [
@@ -30,6 +31,7 @@ export const products: Product[] = [
     maxStock: 30,
     modelPath: undefined,
     color: '#00eaff',
+    comingSoon: true,
   },
 ]
 

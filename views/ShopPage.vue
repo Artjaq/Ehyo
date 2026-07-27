@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { computed } from 'vue'
 import { useRouter } from 'vue-router'
 import GlitchText from '@/components/GlitchText.vue'
 import ProductCanvas from '@/components/ProductCanvas.vue'
@@ -8,6 +9,11 @@ import logoUrl from '@/assets/picture/ehyo-blanc.svg'
 const router = useRouter()
 
 const product = products[0]
+
+// Statut bas de carte : drop à venir vs slot en attente
+const slotStatus = computed(() =>
+  product.comingSoon ? '// COMING SOON //' : '// AWAITING DROP //'
+)
 
 function navigateToProduct(slug: string) {
   router.push(`/shop/${slug}`)
@@ -46,7 +52,7 @@ function navigateToProduct(slug: string) {
           <span class="corner br" />
 
           <span class="unit-label font-press">{{ product.name }}</span>
-          <span class="slot-status font-press">// AWAITING DROP //</span>
+          <span class="slot-status font-press">{{ slotStatus }}</span>
         </div>
       </div>
 
