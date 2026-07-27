@@ -65,6 +65,11 @@ function handleBuy() {
 
           <h2 class="font-press text-2xl sm:text-3xl product-name">{{ product.name }}</h2>
 
+          <!-- Badge drop à venir — le prix reste visible (hype) -->
+          <p v-if="product.comingSoon" class="coming-soon-badge font-press">
+            COMING SOON
+          </p>
+
           <p class="font-press text-xl product-price">{{ displayPrice }}</p>
 
           <p class="font-press text-[8px] sm:text-[9px] leading-6 tracking-widest product-desc">
@@ -73,20 +78,27 @@ function handleBuy() {
 
           <p class="sys-label font-press">LIMITED // {{ product.maxStock }} UNITS MAX</p>
 
-          <!-- Quantity selector -->
-          <div class="qty-row">
-            <span class="sys-label font-press mr-4">QTY</span>
-            <div class="qty-selector">
-              <button class="qty-btn font-press" :disabled="quantity <= 1" @click="decrement">−</button>
-              <span class="qty-value font-press">{{ quantity }}</span>
-              <button class="qty-btn font-press" :disabled="quantity >= 5" @click="increment">+</button>
-            </div>
-          </div>
-
-          <!-- Buy button -->
-          <button class="buy-btn font-press" @click="handleBuy">
-            BUY NOW
+          <!-- Drop verrouillé : ni QTY ni achat, un seul bouton inerte -->
+          <button v-if="product.comingSoon" class="buy-btn font-press is-locked" disabled>
+            LOCKED // DROP INCOMING
           </button>
+
+          <template v-else>
+            <!-- Quantity selector -->
+            <div class="qty-row">
+              <span class="sys-label font-press mr-4">QTY</span>
+              <div class="qty-selector">
+                <button class="qty-btn font-press" :disabled="quantity <= 1" @click="decrement">−</button>
+                <span class="qty-value font-press">{{ quantity }}</span>
+                <button class="qty-btn font-press" :disabled="quantity >= 5" @click="increment">+</button>
+              </div>
+            </div>
+
+            <!-- Buy button -->
+            <button class="buy-btn font-press" @click="handleBuy">
+              BUY NOW
+            </button>
+          </template>
 
         </div>
       </div>
@@ -173,6 +185,35 @@ function handleBuy() {
   color: var(--c);
   opacity: 0.85;
 }
+
+/* Badge drop à venir — même grammaire que .sys-label, en plus lisible + respiration néon */
+.coming-soon-badge {
+  align-self: flex-start;
+  font-size: 10px;
+  letter-spacing: 0.24em;
+  color: var(--c);
+  border: 1px solid color-mix(in srgb, var(--c) 35%, transparent);
+  background: color-mix(in srgb, var(--c) 6%, #000408);
+  border-radius: 0.3rem;
+  padding: 0.45rem 0.9rem;
+  animation: comingSoonPulse 2.4s ease-in-out infinite;
+}
+
+/* currentColor suit var(--c) : pas de couleur en dur dans les keyframes */
+@keyframes comingSoonPulse {
+  0%, 100% {
+    text-shadow: 0 0 6px currentColor;
+    box-shadow: 0 0 6px color-mix(in srgb, currentColor 20%, transparent);
+  }
+  50% {
+    text-shadow: 0 0 14px currentColor;
+    box-shadow: 0 0 18px color-mix(in srgb, currentColor 45%, transparent);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .coming-soon-badge { animation: none; }
+}
 .product-desc {
   color: rgba(255, 255, 255, 0.45);
   max-width: 38ch;
@@ -232,12 +273,18 @@ function handleBuy() {
   transition: all 0.3s ease;
   box-shadow: 0 0 8px color-mix(in srgb, var(--c) 18%, transparent);
 }
-.buy-btn:hover {
+.buy-btn:hover:not(:disabled) {
   background: color-mix(in srgb, var(--c) 14%, #000408);
   border-color: color-mix(in srgb, var(--c) 65%, transparent);
   box-shadow:
     0 0 18px color-mix(in srgb, var(--c) 42%, transparent),
     0 0 36px color-mix(in srgb, var(--c) 18%, transparent);
+}
+/* Drop verrouillé : bouton inerte, aucun glow au survol */
+.buy-btn.is-locked {
+  opacity: 0.35;
+  cursor: not-allowed;
+  box-shadow: none;
 }
 
 /* Back link */

@@ -6,6 +6,45 @@ entrée existante.
 
 ---
 
+## 2026-07-27 — branche `feat/coming-soon`
+
+**Résumé** : ajout d'un état « coming soon » piloté par flag sur un produit, pour faire la
+promo d'un drop avant son ouverture. Pas de date connue → **pas de countdown** : le prix et
+la description restent visibles (hype), seul l'achat est verrouillé. `UNIT-001` passe en
+`comingSoon: true`.
+
+**Fichiers modifiés**
+- `data/products.ts` — champ optionnel `comingSoon?: boolean` sur l'interface `Product` ;
+  `comingSoon: true` sur `UNIT-001`
+- `views/ProductDetailPage.vue` — badge « COMING SOON » au-dessus du prix (font-press,
+  `var(--c)`, respiration néon `comingSoonPulse` via `currentColor`, coupée en
+  `prefers-reduced-motion`) ; le sélecteur QTY + le bouton BUY NOW sont remplacés par un
+  unique bouton `disabled` « LOCKED // DROP INCOMING » (`.buy-btn.is-locked` : opacité
+  réduite, `cursor: not-allowed`, pas de glow) ; `.buy-btn:hover` restreint à
+  `:not(:disabled)`
+- `views/ShopPage.vue` — le `slot-status` en dur devient un `computed` `slotStatus` :
+  `// COMING SOON //` si `comingSoon`, sinon `// AWAITING DROP //`
+- `CHANGELOG.md` — cette entrée
+
+**Comment tester** : `npm run build` (vue-tsc) doit passer, puis `npm run dev` —
+1. `/shop` : la carte affiche `// COMING SOON //` en bas ; le clic navigue toujours vers
+   `/shop/unit-001`.
+2. `/shop/unit-001` : badge « COMING SOON » pulsé au-dessus du prix, prix et description
+   toujours affichés, pas de QTY, bouton « LOCKED // DROP INCOMING » inerte (pas de hover
+   glow, curseur barré).
+3. Passer `comingSoon: false` (ou retirer la ligne) dans `data/products.ts` → retour au
+   comportement d'origine : QTY + BUY NOW actifs, `// AWAITING DROP //` sur la carte.
+
+**Comment annuler** : `git checkout main -- data/products.ts views/ProductDetailPage.vue
+views/ShopPage.vue` (branche de travail : `feat/coming-soon`, base `3d39fe3`).
+
+**Limitations** : le flag est statique dans `data/products.ts` — pas d'ouverture
+automatique du drop ni de source distante ; il faudra le basculer à la main (ou le brancher
+sur le stock Upstash) au lancement. Aucun garde-fou côté checkout : `handleBuy` reste un
+`console.log`, la protection est uniquement visuelle tant que Stripe n'est pas branché.
+
+---
+
 ## 2026-07-23 — branche `main`
 
 **Résumé** : réécriture complète du `README.md`, jusque-là périmé (il décrivait encore la
