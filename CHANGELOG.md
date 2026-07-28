@@ -6,6 +6,35 @@ entrée existante.
 
 ---
 
+## 2026-07-28 — branche `feat/intro-boot-sequence`
+
+**Résumé** : boot sequence Linux/BIOS au clic sur START de la page Intro. Des lignes
+de terminal défilent en overlay avant de naviguer vers `/home`. Skip au clic,
+session-skip pour ne pas rejouer en navigation interne.
+
+**Fichiers modifiés**
+- `views/Intro.vue` — overlay boot sequence + fade-out contenu + session skip
+
+**Détail** : `BOOT_LINES` (tableau de strings éditable) imprimé ligne par ligne
+(40-80 ms, instant print) dans un overlay `fixed inset-0 z-50` fond `#00040a` avec
+classe `.crt` ; mots-clés colorés via les vars `--neon-green` (`OK`/`[ OK ]`),
+`--neon-cyan` (`EHYO`), `--neon-amber` (`STANDBY`). Le conteneur est en
+`justify-content: flex-end` + `overflow: hidden` : les nouvelles lignes poussent les
+anciennes hors du cadre. Clic/tap n'importe où = skip (`[ CLICK TO SKIP ]` en bas à
+droite). Flag `sessionStorage['ehyo-booted']` posé avant chaque `router.push('/home')`
+(boot complet ou skip) et testé dans `handleStartClick`. Timers purgés dans
+`onUnmounted`, garde `done` one-shot sur `finish()`.
+
+**Comment tester** : `npm run build` puis `npm run dev`, ouvrir `/`, cliquer START.
+
+**Comment annuler** : `git checkout game -- views/Intro.vue`
+
+**Limitations connues** : aucun son ; le boot ne rejoue qu'après ouverture d'un
+nouvel onglet (sessionStorage), pas après un simple reload de `/`… si le flag a déjà
+été posé dans l'onglet.
+
+---
+
 ## 2026-07-11 — branche `feat/balance-spawn-bombe` (3ᵉ passe)
 
 **Résumé** : retours de jeu — 4 chantiers. 1) **AERO = vrai lance-flamme** : cône
