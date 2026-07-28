@@ -6,92 +6,32 @@ entrée existante.
 
 ---
 
-## 2026-07-27 (2) — branche `feat/coming-soon`
+## 2026-07-28 — branche `feat/intro-boot-sequence`
 
-**Résumé** : le prix est désormais **masqué** quand `comingSoon === true` — révision du
-parti pris de l'entrée précédente (qui gardait le prix visible « pour la hype ») : on garde
-le suspense jusqu'au drop. Pas de placeholder, le badge « COMING SOON » occupe la place.
-
-**Fichiers modifiés**
-- `views/ProductDetailPage.vue` — `v-if="!product.comingSoon"` sur le `<p class="product-price">` ;
-  commentaire du badge mis à jour
-- `CHANGELOG.md` — cette entrée
-
-**Comment tester** : `npm run build` (vue-tsc) puis `npm run dev` — `/shop/unit-001` :
-plus aucun prix affiché, badge « COMING SOON » puis directement la description ;
-l'espacement `gap-5` de la colonne reste régulier (le nœud est retiré, pas juste masqué).
-Passer `comingSoon: false` dans `data/products.ts` → le prix `CHF 49.00` réapparaît.
-
-**Comment annuler** : `git checkout e1a61d9 -- views/ProductDetailPage.vue` (commit de
-l'état « prix visible »).
-
-**Limitations** : `displayPrice` reste calculé même quand il n'est pas rendu (sans effet —
-computed paresseux). Les limites de l'entrée précédente tiennent toujours : flag statique,
-verrou purement visuel côté client.
-
----
-
-## 2026-07-27 — branche `feat/coming-soon`
-
-**Résumé** : ajout d'un état « coming soon » piloté par flag sur un produit, pour faire la
-promo d'un drop avant son ouverture. Pas de date connue → **pas de countdown** : le prix et
-la description restent visibles (hype), seul l'achat est verrouillé. `UNIT-001` passe en
-`comingSoon: true`.
+**Résumé** : boot sequence Linux/BIOS au clic sur START de la page Intro. Des lignes
+de terminal défilent en overlay avant de naviguer vers `/home`. Skip au clic,
+session-skip pour ne pas rejouer en navigation interne.
 
 **Fichiers modifiés**
-- `data/products.ts` — champ optionnel `comingSoon?: boolean` sur l'interface `Product` ;
-  `comingSoon: true` sur `UNIT-001`
-- `views/ProductDetailPage.vue` — badge « COMING SOON » au-dessus du prix (font-press,
-  `var(--c)`, respiration néon `comingSoonPulse` via `currentColor`, coupée en
-  `prefers-reduced-motion`) ; le sélecteur QTY + le bouton BUY NOW sont remplacés par un
-  unique bouton `disabled` « LOCKED // DROP INCOMING » (`.buy-btn.is-locked` : opacité
-  réduite, `cursor: not-allowed`, pas de glow) ; `.buy-btn:hover` restreint à
-  `:not(:disabled)`
-- `views/ShopPage.vue` — le `slot-status` en dur devient un `computed` `slotStatus` :
-  `// COMING SOON //` si `comingSoon`, sinon `// AWAITING DROP //`
-- `CHANGELOG.md` — cette entrée
+- `views/Intro.vue` — overlay boot sequence + fade-out contenu + session skip
 
-**Comment tester** : `npm run build` (vue-tsc) doit passer, puis `npm run dev` —
-1. `/shop` : la carte affiche `// COMING SOON //` en bas ; le clic navigue toujours vers
-   `/shop/unit-001`.
-2. `/shop/unit-001` : badge « COMING SOON » pulsé au-dessus du prix, prix et description
-   toujours affichés, pas de QTY, bouton « LOCKED // DROP INCOMING » inerte (pas de hover
-   glow, curseur barré).
-3. Passer `comingSoon: false` (ou retirer la ligne) dans `data/products.ts` → retour au
-   comportement d'origine : QTY + BUY NOW actifs, `// AWAITING DROP //` sur la carte.
+**Détail** : `BOOT_LINES` (tableau de strings éditable) imprimé ligne par ligne
+(40-80 ms, instant print) dans un overlay `fixed inset-0 z-50` fond `#00040a` avec
+classe `.crt` ; mots-clés colorés via les vars `--neon-green` (`OK`/`[ OK ]`),
+`--neon-cyan` (`EHYO`), `--neon-amber` (`STANDBY`). Le conteneur est en
+`justify-content: flex-end` + `overflow: hidden` : les nouvelles lignes poussent les
+anciennes hors du cadre. Clic/tap n'importe où = skip (`[ CLICK TO SKIP ]` en bas à
+droite). Flag `sessionStorage['ehyo-booted']` posé avant chaque `router.push('/home')`
+(boot complet ou skip) et testé dans `handleStartClick`. Timers purgés dans
+`onUnmounted`, garde `done` one-shot sur `finish()`.
 
-**Comment annuler** : `git checkout main -- data/products.ts views/ProductDetailPage.vue
-views/ShopPage.vue` (branche de travail : `feat/coming-soon`, base `3d39fe3`).
+**Comment tester** : `npm run build` puis `npm run dev`, ouvrir `/`, cliquer START.
 
-**Limitations** : le flag est statique dans `data/products.ts` — pas d'ouverture
-automatique du drop ni de source distante ; il faudra le basculer à la main (ou le brancher
-sur le stock Upstash) au lancement. Aucun garde-fou côté checkout : `handleBuy` reste un
-`console.log`, la protection est uniquement visuelle tant que Stripe n'est pas branché.
+**Comment annuler** : `git checkout game -- views/Intro.vue`
 
----
-
-## 2026-07-23 — branche `main`
-
-**Résumé** : réécriture complète du `README.md`, jusque-là périmé (il décrivait encore la
-migration React→Vue et une structure `src/…` qui n'existe plus). Nouveau README orienté
-**portfolio**, rédigé dans le style du site (bloc ASCII EHYO, prompts `>` terminal,
-ton cyberpunk) : pitch de la marque, stack, charte, carte des routes, section détaillée
-sur NEON GRAFFITI SURVIVOR et ses partis pris d'ingénierie, commandes, liens docs.
-
-**Fichiers modifiés**
-- `README.md` — réécrit intégralement
-- `CHANGELOG.md` — cette entrée
-
-**Comment tester** : ouvrir `README.md` (preview Markdown) — vérifier que les liens
-relatifs vers `CLAUDE.md`, `CHARTE-GRAPHIQUE.md`, `CHANGELOG.md` résolvent et que les
-routes listées correspondent à `router/index.ts`. Aucun code touché : pas de build requis.
-
-**Comment annuler** : `git checkout HEAD~1 -- README.md CHANGELOG.md` (ou depuis le
-commit de référence `125d19a` pour l'ancienne version du README).
-
-**Limitations** : le README ne documente pas les specs détaillées (`SPECS_*.md`,
-`BRIEF_SHOOTER_STREET.md`) ; il renvoie vers `CLAUDE.md`. Section paiements décrite
-comme « prévue » — à mettre à jour quand Stripe/TWINT passeront en prod.
+**Limitations connues** : aucun son ; le boot ne rejoue qu'après ouverture d'un
+nouvel onglet (sessionStorage), pas après un simple reload de `/`… si le flag a déjà
+été posé dans l'onglet.
 
 ---
 
