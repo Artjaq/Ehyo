@@ -106,3 +106,6 @@ service-account.json
 # pnpm (si migration depuis npm)
 .pnpm-store/
 
+firebase-debug.log
+ui-debug.log
+functions/.env
