@@ -6,6 +6,49 @@ entrée existante.
 
 ---
 
+## 2026-10-03 — branche `test/styleguide-charte`
+
+**Résumé** : page de référence interne `/styleguide` qui rend la charte graphique avec
+ses propres tokens — palette néon, surfaces, échelle de texte, typographie, titres
+glitch, composants signature, bibliothèque d'animations, mapping moteur et règles
+d'usage. Sert de preuve vivante de la charte : si un token change dans `globals.css`,
+la page le montre.
+
+**Fichiers créés**
+- `views/StyleguidePage.vue` — la page (sections 01→07 + règles + pied)
+
+**Fichiers modifiés**
+- `router/index.ts` — route lazy `/styleguide`
+
+**Détail** : aucune couleur inventée — les seuls hex littéraux sont les valeurs de
+token affichées comme donnée. Réutilise `.terminal-wrap`, `.crt`, `.hud-corner-*`,
+`.hud-glow`, `.terminal-input`, `.terminal-label`, `GlitchText`, `GlitchTextFx`,
+`StartButton`, `ui/Button` et les keyframes existantes (`crtFlicker`, `neonPulse`,
+`pulse-glow-cyan`, `cardGlitch`, `scanLine`, `blink-cursor`). Interactions : clic sur
+un swatch/surface/niveau de texte → copie la valeur dans le presse-papiers ; clic sur
+une tuile d'animation → rejoue l'anim (remount via `:key`) ; toggle CRT ON/OFF en
+tête, parce que l'effet est budgétisé. Le bloc de démo des boutons shadcn est passé
+en `.dark` avec un `color: var(--foreground)` explicite — sans lui, `ghost`/`outline`
+héritent du foreground clair posé sur `<body>` et deviennent illisibles. Copy en
+`Press Start 2P` volontairement sans accents : la police n'a pas de glyphes accentués
+en capitale (sinon fallback incohérent). `prefers-reduced-motion` coupe les anims
+décoratives.
+
+**Comment tester** : `npm run build` puis `npm run dev`, ouvrir `/styleguide`.
+Vérifier : la copie au clic affiche « COPIÉ ✓ », le toggle CRT retire bien les
+scanlines, le survol de `.hud-glow` allume la bordure cyan, les 6 variantes de bouton
+shadcn sont toutes lisibles, et les titres arcade n'affichent aucun glyphe de
+fallback.
+
+**Comment annuler** : `git checkout main -- router/index.ts && rm views/StyleguidePage.vue`
+
+**Limitations connues** : page non référencée depuis le menu (accès par URL directe) —
+volontaire, c'est un outil interne. `npm run lint` est cassé à l'échelle du repo
+(script avec `--ignore-path`, incompatible ESLint 9, et aucun `eslint.config.js`
+présent) — antérieur à ce changement, non corrigé ici.
+
+---
+
 ## 2026-07-28 — branche `feat/intro-boot-sequence`
 
 **Résumé** : boot sequence Linux/BIOS au clic sur START de la page Intro. Des lignes

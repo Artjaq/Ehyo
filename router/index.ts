@@ -42,6 +42,12 @@ const router = createRouter({
       path: '/game',
       name: 'game',
       component: () => import('@/views/GamePage.vue')
+    },
+    {
+      // Page de référence interne : rend la charte graphique avec ses propres tokens.
+      path: '/styleguide',
+      name: 'styleguide',
+      component: () => import('@/views/StyleguidePage.vue')
     }
   ]
 })

@@ -33,6 +33,7 @@ export const products: Product[] = [
     color: '#00eaff',
     comingSoon: true,
   },
+
 ]
 
 export function getProductBySlug(slug: string): Product | undefined {
